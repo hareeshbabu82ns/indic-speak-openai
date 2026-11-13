@@ -1,0 +1,14 @@
+gradio>=6.0
+spaces
+torch
+torchaudio
+transformers>=5
+sentencepiece
+soundfile
+snac
+numpy
+bitsandbytes
+accelerate
+python-dotenv
+huggingface_hub
+mlx-lm
