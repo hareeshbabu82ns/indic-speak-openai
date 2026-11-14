@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Indic-Speak & Transcribe | OpenAI-Compatible Speech API</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --badge-bg: #312e81;
+      --badge-text: #c7d2fe;
+      --code-bg: #0b0f19;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: rgba(30, 41, 59, 0.8);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--card-border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .logo-icon {
+      font-size: 1.75rem;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+    }
+    .logo-text h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+    .logo-text p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .header-links {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    .nav-btn {
+      background: transparent;
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.2s;
+    }
+    .nav-btn:hover {
+      background: var(--card-border);
+    }
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 9999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+
+    main {
+      flex: 1;
+      max-width: 1200px;
+      width: 100%;
+      margin: 1.5rem auto;
+      padding: 0 1rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--card-border);
+      margin-bottom: 1.5rem;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      padding: 0.75rem 1.25rem;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+    .tab-btn.active {
+      color: #818cf8;
+      border-bottom-color: #818cf8;
+      font-weight: 600;
+    }
+    .tab-btn:hover:not(.active) {
+      color: var(--text);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 868px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .card-subtitle {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: -0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      margin-bottom: 0.4rem;
+      color: #cbd5e1;
+    }
+    textarea, select, input[type="text"], input[type="number"] {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    textarea:focus, select:focus, input:focus {
+      border-color: var(--primary);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 110px;
+    }
+
+    .preset-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.5rem;
+    }
+    .chip {
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #c7d2fe;
+      border-radius: 9999px;
+      padding: 0.2rem 0.6rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .chip:hover {
+      background: var(--primary);
+      color: white;
+    }
+
+    .row-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.7rem 1.25rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-secondary {
+      background: #334155;
+      color: white;
+    }
+    .btn-secondary:hover {
+      background: #475569;
+    }
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    /* Audio visualizer and player */
+    .player-card {
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-top: 1.25rem;
+    }
+    audio {
+      width: 100%;
+      height: 42px;
+      border-radius: 6px;
+      outline: none;
+      margin-top: 0.5rem;
+    }
+
+    .stats-bar {
+      display: flex;
+      gap: 1.5rem;
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #1e293b;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .stats-item span {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    /* Record box */
+    .record-box {
+      border: 2px dashed var(--card-border);
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.4);
+      margin-bottom: 1.25rem;
+      transition: border-color 0.2s;
+    }
+    .record-box.recording {
+      border-color: var(--danger);
+      background: rgba(239, 68, 68, 0.05);
+    }
+    .rec-btn {
+      width: 68px;
+      height: 68px;
+      border-radius: 50%;
+      background: #ef4444;
+      border: 4px solid rgba(239, 68, 68, 0.3);
+      color: white;
+      font-size: 1.5rem;
+      cursor: pointer;
+      margin: 0 auto 0.75rem auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .rec-btn.recording {
+      animation: record-pulse 1.2s infinite;
+      border-radius: 12px;
+      width: 54px;
+      height: 54px;
+    }
+    @keyframes record-pulse {
+      0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+      70% { transform: scale(1.05); box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
+      100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    .upload-zone {
+      border: 2px dashed var(--card-border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      margin-bottom: 1rem;
+      transition: border-color 0.2s;
+    }
+    .upload-zone:hover {
+      border-color: var(--primary);
+    }
+
+    .transcript-output {
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 1rem;
+      min-height: 120px;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: inherit;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    .segment-item {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      gap: 0.75rem;
+      align-items: baseline;
+      font-size: 0.88rem;
+    }
+    .segment-time {
+      color: #818cf8;
+      font-family: monospace;
+      font-size: 0.78rem;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    pre code {
+      display: block;
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #a5f3fc;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    th, td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--card-border);
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 500;
+      background: #1e293b;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-primary { background: var(--badge-bg); color: var(--badge-text); }
+    .badge-green { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .badge-yellow { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: #1e293b;
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+      display: none;
+      z-index: 100;
+      animation: fadeIn 0.3s;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo-group">
+      <div class="logo-icon">🎙️</div>
+      <div class="logo-text">
+        <h1>Indic-Speak & Transcribe</h1>
+        <p>OpenAI-Compatible Speech API (TTS & ASR)</p>
+      </div>
+    </div>
+    <div class="header-links">
+      <div class="status-pill">
+        <div class="status-dot"></div>
+        <span id="backend-status">API Ready</span>
+      </div>
+      <a href="/docs" target="_blank" class="nav-btn">📖 Swagger Docs</a>
+      <a href="/v1/models" target="_blank" class="nav-btn">🤖 Models JSON</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('tts')">🔊 Text to Speech (TTS)</button>
+      <button class="tab-btn" onclick="switchTab('asr')">🎙️ Speech to Text (ASR)</button>
+      <button class="tab-btn" onclick="switchTab('files')">📁 Saved Files & Downloads</button>
+      <button class="tab-btn" onclick="switchTab('api')">💻 OpenAI API Code</button>
+    </div>
+
+    <!-- TAB 1: TTS -->
+    <div id="tab-tts" class="tab-content active">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">
+            <span>Text to Synthesize</span>
+            <span class="badge badge-primary">POST /v1/audio/speech</span>
+          </div>
+
+          <div class="form-group">
+            <textarea id="tts-input" placeholder="Type or paste text in any Indic language or English...">కరాగ్రే వసతే లక్ష్మీః కరమధ్యే సరస్వతీ కరమూలే తు గోవిందః ప్రభాతే కర దర్శనమ్‌</textarea>
+            <div class="preset-chips">
+              <span class="chip" onclick="setPreset('te')">🇮🇳 Telugu (కరాగ్రే...)</span>
+              <span class="chip" onclick="setPreset('hi')">🇮🇳 Hindi (विज्ञान...)</span>
+              <span class="chip" onclick="setPreset('ta')">🇮🇳 Tamil (வணக்கம்...)</span>
+              <span class="chip" onclick="setPreset('bn')">🇮🇳 Bengali (নমস্কার...)</span>
+              <span class="chip" onclick="setPreset('sa')">🇮🇳 Sanskrit (गायत्री...)</span>
+              <span class="chip" onclick="setPreset('en')">🇬🇧 English</span>
+            </div>
+          </div>
+
+          <div class="row-controls">
+            <div class="form-group">
+              <label for="tts-voice">Voice (44 Native Indic + OpenAI Aliases)</label>
+              <select id="tts-voice">
+                <!-- Dynamically populated from API -->
+                <optgroup label="OpenAI Standard Aliases">
+                  <option value="alloy">alloy (Amit - Hindi Male)</option>
+                  <option value="shimmer">shimmer (Sravani - Telugu Female)</option>
+                  <option value="echo">echo (Arun - Tamil Male)</option>
+                  <option value="fable">fable (Deepika - Kannada Female)</option>
+                  <option value="onyx">onyx (Vamsi - Telugu Male)</option>
+                  <option value="nova">nova (Kavya - Hindi Female)</option>
+                </optgroup>
+                <optgroup label="Telugu (te)">
+                  <option value="Sravani" selected>Sravani (Female)</option>
+                  <option value="Vamsi">Vamsi (Male)</option>
+                </optgroup>
+                <optgroup label="Hindi (hi)">
+                  <option value="Kavya">Kavya (Female)</option>
+                  <option value="Amit">Amit (Male)</option>
+                </optgroup>
+                <optgroup label="Tamil (ta)">
+                  <option value="Anitha">Anitha (Female)</option>
+                  <option value="Arun">Arun (Male)</option>
+                </optgroup>
+                <optgroup label="Kannada (kn)">
+                  <option value="Deepika">Deepika (Female)</option>
+                  <option value="Adarsh">Adarsh (Male)</option>
+                </optgroup>
+                <optgroup label="Bengali (bn)">
+                  <option value="Ishita">Ishita (Female)</option>
+                  <option value="Sourav">Sourav (Male)</option>
+                </optgroup>
+                <optgroup label="Marathi (mr)">
+                  <option value="Anagha">Anagha (Female)</option>
+                  <option value="Chinmay">Chinmay (Male)</option>
+                </optgroup>
+                <optgroup label="Gujarati (gu)">
+                  <option value="Dhara">Dhara (Female)</option>
+                  <option value="Parth">Parth (Male)</option>
+                </optgroup>
+                <optgroup label="Malayalam (ml)">
+                  <option value="Lakshmi">Lakshmi (Female)</option>
+                  <option value="Kiran">Kiran (Male)</option>
+                </optgroup>
+                <optgroup label="Sanskrit (sa)">
+                  <option value="Bharati">Bharati (Female)</option>
+                  <option value="Aryaman">Aryaman (Male)</option>
+                </optgroup>
+                <optgroup label="Punjabi (pa)">
+                  <option value="Kaur">Kaur (Female)</option>
+                  <option value="Manpreet">Manpreet (Male)</option>
+                </optgroup>
+                <optgroup label="Urdu (ur)">
+                  <option value="Saba">Saba (Female)</option>
+                  <option value="Zaid">Zaid (Male)</option>
+                </optgroup>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="tts-style">Vocal Emotion / Style</label>
+              <select id="tts-style">
+                <option value="NEUTRAL" selected>Neutral</option>
+                <option value="HAPPY">Happy</option>
+                <option value="SAD">Sad</option>
+                <option value="ANGER">Anger</option>
+                <option value="FEAR">Fear</option>
+                <option value="SURPRISE">Surprise</option>
+                <option value="news">News Anchor</option>
+                <option value="single person narration audiobook">Audiobook Narration</option>
+                <option value="children's stories">Children's Story</option>
+                <option value="advertisements">Advertisement</option>
+                <option value="Customer Care">Customer Care</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row-controls">
+            <div class="form-group">
+              <label for="tts-model">Engine / Model</label>
+              <select id="tts-model">
+                <option value="indic-speak-mlx" selected>MLX (Apple Silicon GPU - Fast)</option>
+                <option value="indic-speak-torch">PyTorch (MPS/CPU)</option>
+                <option value="tts-1">tts-1 (OpenAI alias)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="tts-format">Audio Format</label>
+              <select id="tts-format">
+                <option value="mp3" selected>MP3 (Default)</option>
+                <option value="wav">WAV (Lossless 24kHz)</option>
+                <option value="flac">FLAC</option>
+                <option value="pcm">Raw PCM (s16le)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="tts-speed">Speed: <span id="speed-val">1.0</span>x</label>
+            <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.05" value="1.0" oninput="document.getElementById('speed-val').innerText = this.value">
+          </div>
+
+          <div class="btn-group">
+            <button class="btn btn-primary" id="btn-generate-tts" onclick="generateTTS(false)">
+              <span>▶️ Generate Audio (Save & Download)</span>
+            </button>
+            <button class="btn btn-secondary" id="btn-stream-tts" onclick="generateTTS(true)">
+              <span>🌊 Stream Directly</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>Audio Player & Output</span>
+            <span id="tts-loading" style="display:none;" class="badge badge-yellow">Generating...</span>
+          </div>
+
+          <div class="player-card">
+            <audio id="tts-audio-player" controls></audio>
+
+            <div class="stats-bar" id="tts-stats" style="display:none;">
+              <div class="stats-item">Duration: <span id="stat-duration">-</span></div>
+              <div class="stats-item">Gen Time: <span id="stat-time">-</span></div>
+              <div class="stats-item">RTF: <span id="stat-rtf">-</span></div>
+            </div>
+
+            <div style="margin-top: 1.25rem; display: flex; gap: 0.5rem;">
+              <a id="btn-download-tts" href="#" download="speech.mp3" class="btn btn-primary" style="display:none; text-decoration:none;">
+                <span>⬇️ Download Audio File</span>
+              </a>
+              <button id="btn-copy-tts-url" class="btn btn-secondary" style="display:none;" onclick="copyTTSUrl()">
+                <span>📋 Copy Audio URL</span>
+              </button>
+            </div>
+          </div>
+
+          <div style="margin-top: 1.5rem;">
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Direct API cURL Command:</p>
+            <pre><code id="tts-curl-box">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "indic-speak-mlx", "input": "...", "voice": "Sravani", "response_format": "mp3"}' \
+  --output speech.mp3</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: ASR -->
+    <div id="tab-asr" class="tab-content">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">
+            <span>Speech Input</span>
+            <span class="badge badge-primary">POST /v1/audio/transcriptions</span>
+          </div>
+
+          <!-- Microphone Record -->
+          <div class="record-box" id="record-box">
+            <button class="rec-btn" id="rec-btn" onclick="toggleRecording()">🎤</button>
+            <div id="rec-status" style="font-size: 0.9rem; font-weight: 500;">Click to Record Voice</div>
+            <div id="rec-timer" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">00:00</div>
+          </div>
+
+          <div style="text-align: center; margin-bottom: 1rem; color: var(--text-muted); font-size: 0.85rem;">— OR UPLOAD AN AUDIO FILE —</div>
+
+          <div class="upload-zone" onclick="document.getElementById('asr-file-input').click()">
+            <input type="file" id="asr-file-input" accept="audio/*" style="display:none;" onchange="handleFileSelect(event)">
+            <p>📁 Click to Browse or Drag & Drop Audio</p>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">WAV, MP3, M4A, OGG, WEBM, FLAC (any length)</p>
+            <p id="selected-filename" style="margin-top: 0.5rem; font-weight: 600; color: #818cf8;"></p>
+          </div>
+
+          <div class="row-controls">
+            <div class="form-group">
+              <label for="asr-lang">Language</label>
+              <select id="asr-lang">
+                <option value="auto" selected>🌐 Auto-detect Language</option>
+                <option value="te">Telugu (te)</option>
+                <option value="hi">Hindi (hi)</option>
+                <option value="ta">Tamil (ta)</option>
+                <option value="kn">Kannada (kn)</option>
+                <option value="bn">Bengali (bn)</option>
+                <option value="mr">Marathi (mr)</option>
+                <option value="gu">Gujarati (gu)</option>
+                <option value="ml">Malayalam (ml)</option>
+                <option value="sa">Sanskrit (sa)</option>
+                <option value="pa">Punjabi (pa)</option>
+                <option value="ur">Urdu (ur)</option>
+                <option value="en">English (en)</option>
+                <option value="as">Assamese (as)</option>
+                <option value="or">Odia (or)</option>
+                <option value="ne">Nepali (ne)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="asr-mode">Script Mode</label>
+              <select id="asr-mode">
+                <option value="native" selected>Native Script (Default)</option>
+                <option value="mixed">Mixed Script / ITN (Latin digits & loans)</option>
+                <option value="romanised">Romanized (Latin transliteration)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row-controls">
+            <div class="form-group">
+              <label for="asr-format">Response Format</label>
+              <select id="asr-format">
+                <option value="verbose_json" selected>verbose_json (with Timestamps & Segments)</option>
+                <option value="json">json (Standard OpenAI)</option>
+                <option value="text">text (Plain Text)</option>
+                <option value="srt">srt (SubRip Subtitles)</option>
+                <option value="vtt">vtt (WebVTT Subtitles)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="asr-model">Model</label>
+              <select id="asr-model">
+                <option value="indic-transcribe" selected>indic-transcribe (Bodhan AI)</option>
+                <option value="whisper-1">whisper-1 (OpenAI alias)</option>
+              </select>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="btn-transcribe" onclick="transcribeAudio()">
+            <span>📝 Transcribe Audio</span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>Transcription Result</span>
+            <div style="display:flex; gap: 0.5rem;">
+              <span id="asr-lang-badge" class="badge badge-green" style="display:none;">Detected: -</span>
+              <span id="asr-loading" class="badge badge-yellow" style="display:none;">Transcribing...</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div id="asr-output" class="transcript-output">Your transcribed text will appear here...</div>
+          </div>
+
+          <div class="btn-group" style="margin-bottom: 1.25rem;">
+            <button class="btn btn-secondary" onclick="copyTranscript()">📋 Copy Text</button>
+            <button class="btn btn-secondary" onclick="downloadTranscript('txt')">⬇️ Download .txt</button>
+            <button class="btn btn-secondary" id="btn-dl-srt" style="display:none;" onclick="downloadTranscript('srt')">⬇️ Download .srt</button>
+          </div>
+
+          <div id="segments-container" style="display:none;">
+            <div class="card-title" style="font-size: 0.95rem;">Segments with Timestamps</div>
+            <div id="segments-list" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 6px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: SAVED FILES -->
+    <div id="tab-files" class="tab-content">
+      <div class="card">
+        <div class="card-title">
+          <span>Saved Audio & Transcription Files</span>
+          <button class="btn btn-secondary" style="width:auto; padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="loadSavedFiles()">🔄 Refresh</button>
+        </div>
+        <p class="card-subtitle">All files generated or transcribed are stored in <code>data/generated</code> and <code>data/transcriptions</code> and can be downloaded anytime.</p>
+
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>File / ID</th>
+                <th>Type</th>
+                <th>Details (Voice/Lang)</th>
+                <th>Duration</th>
+                <th>Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="files-table-body">
+              <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading files...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: API CODE -->
+    <div id="tab-api" class="tab-content">
+      <div class="card">
+        <div class="card-title">Official OpenAI Python SDK Integration</div>
+        <p class="card-subtitle">This server is a 100% drop-in replacement for OpenAI TTS and Whisper endpoints. Set <code>base_url="http://localhost:8000/v1"</code>.</p>
+
+        <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem 0;">1. Text-to-Speech (TTS)</h3>
+        <pre><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="not-needed"  # Local API does not require key
+)
+
+# Synthesize speech
+response = client.audio.speech.create(
+    model="indic-speak-mlx",     # or "indic-speak", "tts-1"
+    voice="Sravani",             # 44 Indic voices or alloy, echo, nova, etc.
+    input="కరాగ్రే వసతే లక్ష్మీః కరమధ్యే సరస్వతీ",
+    response_format="mp3"        # mp3, wav, flac, pcm
+)
+
+# Save to file
+response.stream_to_file("output.mp3")</code></pre>
+
+        <h3 style="font-size: 0.95rem; margin: 1.5rem 0 0.5rem 0;">2. Automatic Speech Recognition (ASR / Whisper)</h3>
+        <pre><code># Transcribe audio file
+with open("output.mp3", "rb") as audio_file:
+    transcription = client.audio.transcriptions.create(
+        model="indic-transcribe",  # or "whisper-1"
+        file=audio_file,
+        language="te"              # or None for auto-detect
+    )
+
+print("Transcription:", transcription.text)</code></pre>
+
+        <h3 style="font-size: 0.95rem; margin: 1.5rem 0 0.5rem 0;">3. Streaming Audio Playback via cURL</h3>
+        <pre><code># Stream direct audio chunks:
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "indic-speak-mlx", "input": "నమస్కారం, ఇది ప్రత్యక్ష ప్రసారం", "voice": "Sravani", "stream": true, "response_format": "wav"}' \
+  | ffplay -nodisp -autoexit -i -</code></pre>
+      </div>
+    </div>
+  </main>
+
+  <div class="toast" id="toast">Message</div>
+
+  <script>
+    let currentAudioBlob = null;
+    let mediaRecorder = null;
+    let recordTimer = null;
+    let recordStartTime = 0;
+    let currentTTSFileUrl = null;
+    let lastTranscriptData = null;
+
+    const PRESETS = {
+      te: "కరాగ్రే వసతే లక్ష్మీః కరమధ్యే సరస్వతీ కరమూలే తు గోవిందః ప్రభాతే కర దర్శనమ్‌",
+      hi: "नमस्ते, आज हम विज्ञान पढ़ेंगे। प्रकाश की चाल लगभग तीन लाख किलोमीटर प्रति सेकंड होती है।",
+      ta: "வணக்கம்! நீங்கள் கேட்ட கேள்விக்கு பதில் இதோ. நன்றி.",
+      bn: "নমস্কার, আজ আবহাওয়া খুব মনোরম। আশা করি আপনার দিনটি শুভ হোক।",
+      sa: "ॐ भूर्भुवः स्वः तत्सवितुर्वरेण्यं भर्गो देवस्य धीमहि धियो यो नः प्रचोदयात्",
+      en: "Welcome to the Indic Speech platform. This is an OpenAI-compatible text-to-speech and speech recognition engine."
+    };
+
+    function setPreset(lang) {
+      document.getElementById('tts-input').value = PRESETS[lang] || '';
+      if (lang === 'te') document.getElementById('tts-voice').value = 'Sravani';
+      if (lang === 'hi') document.getElementById('tts-voice').value = 'Kavya';
+      if (lang === 'ta') document.getElementById('tts-voice').value = 'Anitha';
+      if (lang === 'bn') document.getElementById('tts-voice').value = 'Ishita';
+      if (lang === 'sa') document.getElementById('tts-voice').value = 'Bharati';
+      updateCurl();
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById(`tab-${tabId}`).classList.add('active');
+      event.target.classList.add('active');
+      if (tabId === 'files') loadSavedFiles();
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 3000);
+    }
+
+    function updateCurl() {
+      const input = document.getElementById('tts-input').value.replace(/"/g, '\\"');
+      const voice = document.getElementById('tts-voice').value;
+      const model = document.getElementById('tts-model').value;
+      const format = document.getElementById('tts-format').value;
+      const curl = `curl -X POST http://localhost:8000/v1/audio/speech \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${model}", "input": "${input.slice(0, 50)}...", "voice": "${voice}", "response_format": "${format}"}' \\\n  --output speech.${format}`;
+      document.getElementById('tts-curl-box').innerText = curl;
+    }
+
+    document.getElementById('tts-input').addEventListener('input', updateCurl);
+    document.getElementById('tts-voice').addEventListener('change', updateCurl);
+    document.getElementById('tts-format').addEventListener('change', updateCurl);
+    document.getElementById('tts-model').addEventListener('change', updateCurl);
+
+    async function generateTTS(isStreaming) {
+      const text = document.getElementById('tts-input').value.trim();
+      if (!text) { alert('Please enter some text'); return; }
+
+      const voice = document.getElementById('tts-voice').value;
+      const style = document.getElementById('tts-style').value;
+      const model = document.getElementById('tts-model').value;
+      const format = document.getElementById('tts-format').value;
+      const speed = parseFloat(document.getElementById('tts-speed').value);
+
+      const btnGen = document.getElementById('btn-generate-tts');
+      const btnStream = document.getElementById('btn-stream-tts');
+      const loading = document.getElementById('tts-loading');
+      const audioPlayer = document.getElementById('tts-audio-player');
+      const statsBar = document.getElementById('tts-stats');
+      const btnDl = document.getElementById('btn-download-tts');
+      const btnCopy = document.getElementById('btn-copy-tts-url');
+
+      btnGen.disabled = true;
+      btnStream.disabled = true;
+      loading.style.display = 'inline-block';
+      loading.innerText = isStreaming ? 'Streaming...' : 'Generating...';
+
+      const t0 = performance.now();
+
+      try {
+        const payload = {
+          model: model,
+          input: text,
+          voice: voice,
+          style: style,
+          response_format: format,
+          speed: speed,
+          stream: isStreaming,
+          save: true
+        };
+
+        const response = await fetch('/v1/audio/speech', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || 'Synthesis failed');
+        }
+
+        const fileId = response.headers.get('X-File-Id');
+        const fileUrl = response.headers.get('X-File-Url') || (fileId ? `/v1/audio/files/${fileId}` : null);
+        currentTTSFileUrl = fileUrl ? window.location.origin + fileUrl : null;
+
+        const blob = await response.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        audioPlayer.src = audioUrl;
+        audioPlayer.play();
+
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+        audioPlayer.onloadedmetadata = () => {
+          const duration = audioPlayer.duration.toFixed(2);
+          document.getElementById('stat-duration').innerText = `${duration}s`;
+          document.getElementById('stat-time').innerText = `${elapsed}s`;
+          document.getElementById('stat-rtf').innerText = (elapsed / Math.max(duration, 0.1)).toFixed(2);
+          statsBar.style.display = 'flex';
+        };
+
+        btnDl.href = audioUrl;
+        btnDl.download = `speech_${voice}.${format}`;
+        btnDl.style.display = 'inline-flex';
+        if (currentTTSFileUrl) btnCopy.style.display = 'inline-flex';
+
+        showToast(isStreaming ? 'Stream completed and ready!' : 'Speech generated successfully!');
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        btnGen.disabled = false;
+        btnStream.disabled = false;
+        loading.style.display = 'none';
+      }
+    }
+
+    function copyTTSUrl() {
+      if (currentTTSFileUrl) {
+        navigator.clipboard.writeText(currentTTSFileUrl);
+        showToast('File URL copied to clipboard!');
+      }
+    }
+
+    // ASR Recording
+    async function toggleRecording() {
+      const recBtn = document.getElementById('rec-btn');
+      const recStatus = document.getElementById('rec-status');
+      const recBox = document.getElementById('record-box');
+
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        clearInterval(recordTimer);
+        recBtn.classList.remove('recording');
+        recBox.classList.remove('recording');
+        recBtn.innerText = '🎤';
+        recStatus.innerText = 'Recording saved. Ready to transcribe.';
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          currentAudioBlob = new Blob(chunks, { type: 'audio/webm' });
+          document.getElementById('selected-filename').innerText = `🎙️ Microphone Recording (${(currentAudioBlob.size / 1024).toFixed(1)} KB)`;
+          stream.getTracks().forEach(t => t.stop());
+        };
+
+        mediaRecorder.start();
+        recordStartTime = Date.now();
+        recBtn.classList.add('recording');
+        recBox.classList.add('recording');
+        recBtn.innerText = '⏹️';
+        recStatus.innerText = 'Recording... Click to Stop';
+
+        recordTimer = setInterval(() => {
+          const s = Math.floor((Date.now() - recordStartTime) / 1000);
+          const mins = String(Math.floor(s / 60)).padStart(2, '0');
+          const secs = String(s % 60).padStart(2, '0');
+          document.getElementById('rec-timer').innerText = `${mins}:${secs}`;
+        }, 500);
+
+      } catch (err) {
+        alert('Microphone access denied: ' + err.message);
+      }
+    }
+
+    function handleFileSelect(e) {
+      const file = e.target.files[0];
+      if (file) {
+        currentAudioBlob = file;
+        document.getElementById('selected-filename').innerText = `📁 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+      }
+    }
+
+    async function transcribeAudio() {
+      if (!currentAudioBlob) {
+        alert('Please record your voice or select an audio file first.');
+        return;
+      }
+
+      const lang = document.getElementById('asr-lang').value;
+      const mode = document.getElementById('asr-mode').value;
+      const format = document.getElementById('asr-format').value;
+      const model = document.getElementById('asr-model').value;
+
+      const btn = document.getElementById('btn-transcribe');
+      const loading = document.getElementById('asr-loading');
+      const output = document.getElementById('asr-output');
+      const langBadge = document.getElementById('asr-lang-badge');
+      const segContainer = document.getElementById('segments-container');
+      const segList = document.getElementById('segments-list');
+      const btnSrt = document.getElementById('btn-dl-srt');
+
+      btn.disabled = true;
+      loading.style.display = 'inline-block';
+      output.innerText = 'Transcribing audio... Please wait.';
+      segContainer.style.display = 'none';
+      segList.innerHTML = '';
+
+      try {
+        const formData = new FormData();
+        const filename = currentAudioBlob.name || 'recording.webm';
+        formData.append('file', currentAudioBlob, filename);
+        formData.append('model', model);
+        if (lang !== 'auto') formData.append('language', lang);
+        formData.append('mode', mode);
+        formData.append('response_format', format);
+
+        const res = await fetch('/v1/audio/transcriptions', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || 'Transcription failed');
+        }
+
+        if (format === 'text' || format === 'srt' || format === 'vtt') {
+          const text = await res.text();
+          output.innerText = text;
+          lastTranscriptData = { text: text, format: format };
+          if (format === 'srt') btnSrt.style.display = 'inline-block';
+        } else {
+          const json = await res.json();
+          lastTranscriptData = json;
+          output.innerText = json.text || JSON.stringify(json, null, 2);
+
+          if (json.language) {
+            langBadge.innerText = `Detected: ${json.language.toUpperCase()}`;
+            langBadge.style.display = 'inline-block';
+          }
+
+          if (json.segments && json.segments.length > 0) {
+            segContainer.style.display = 'block';
+            btnSrt.style.display = 'inline-block';
+            json.segments.forEach(seg => {
+              const div = document.createElement('div');
+              div.className = 'segment-item';
+              div.innerHTML = `<span class="segment-time">[${seg.start}s - ${seg.end}s]</span> <span>${seg.text}</span>`;
+              segList.appendChild(div);
+            });
+          }
+        }
+        showToast('Transcription finished!');
+      } catch (e) {
+        output.innerText = 'Error: ' + e.message;
+      } finally {
+        btn.disabled = false;
+        loading.style.display = 'none';
+      }
+    }
+
+    function copyTranscript() {
+      const text = document.getElementById('asr-output').innerText;
+      if (text) {
+        navigator.clipboard.writeText(text);
+        showToast('Transcribed text copied!');
+      }
+    }
+
+    function downloadTranscript(ext) {
+      if (!lastTranscriptData) return;
+      let content = document.getElementById('asr-output').innerText;
+      let mime = 'text/plain';
+
+      if (ext === 'json') {
+        content = JSON.stringify(lastTranscriptData, null, 2);
+        mime = 'application/json';
+      }
+
+      const blob = new Blob([content], { type: mime });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `transcript.${ext}`;
+      a.click();
+    }
+
+    async function loadSavedFiles() {
+      const tbody = document.getElementById('files-table-body');
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading saved files...</td></tr>';
+
+      try {
+        const res = await fetch('/v1/audio/files');
+        const files = await res.json();
+
+        if (files.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No saved files found yet.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = '';
+        files.forEach(f => {
+          const isTts = f.type === 'tts';
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td><strong>${f.id}</strong><br><small style="color:var(--text-muted);">${f.filename}</small></td>
+            <td><span class="badge ${isTts ? 'badge-primary' : 'badge-green'}">${isTts ? 'TTS Speech' : 'ASR Transcript'}</span></td>
+            <td>${isTts ? `${f.voice || '-'} (${f.style || 'Neutral'})` : `${f.language || 'Auto'} (${f.mode || 'native'})`}</td>
+            <td>${f.duration ? f.duration + 's' : '-'}</td>
+            <td>${f.created_at || '-'}</td>
+            <td>
+              <a href="/v1/audio/files/${f.id}" target="_blank" class="nav-btn" style="display:inline-flex; padding:0.2rem 0.5rem; margin-right:0.25rem;">▶️ Play</a>
+              <a href="/v1/audio/files/${f.id}/download" class="nav-btn" style="display:inline-flex; padding:0.2rem 0.5rem;">⬇️ Download</a>
+            </td>
+          `;
+          tbody.appendChild(row);
+        });
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="color:red; text-align:center;">Failed to load files: ${e.message}</td></tr>`;
+      }
+    }
+
+    // Health check on load
+    fetch('/health').then(r => r.json()).then(data => {
+      document.getElementById('backend-status').innerText = data.status === 'ok' ? 'API Ready' : 'Degraded';
+    }).catch(() => {
+      document.getElementById('backend-status').innerText = 'Server Offline';
+    });
+  </script>
+</body>
+</html>
