@@ -1,15 +1,3 @@
-title: Desi Aawaaz
-emoji: 🏆
-colorFrom: indigo
-colorTo: gray
-sdk: gradio
-sdk_version: 6.28.0
-python_version: '3.12'
-app_file: app.py
-pinned: false
-license: apache-2.0
-short_description: Indian Speech to Speech model orchestration & OpenAI-compatible TTS/ASR API
-
 # Indic-Speak & Transcribe: OpenAI-Compatible Speech API
 
 An OpenAI-compatible **Text-to-Speech (TTS)** and **Automatic Speech Recognition (ASR)** API server powered by `bodhan-ai/indic-speak`, `iniquitous/indic-speak-mlx-bf16`, and `bodhan-ai/indic-transcribe-core`.
@@ -91,16 +79,15 @@ print(transcript.text)
 
 ## 📡 Key Endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/v1/audio/speech` | OpenAI-compatible TTS (streaming & non-streaming) |
-| `POST` | `/v1/audio/transcriptions` | OpenAI-compatible ASR transcription |
-| `POST` | `/v1/audio/translations` | OpenAI-compatible transliteration/translation |
-| `GET`  | `/v1/models` | List available models |
-| `GET`  | `/v1/audio/voices` | Catalog of 44 voices & styles |
-| `GET`  | `/v1/audio/languages` | Supported Indic languages |
-| `GET`  | `/v1/audio/files` | List saved audio and transcript files |
-| `GET`  | `/v1/audio/files/{file_id}` | Play or retrieve saved file |
-| `GET`  | `/v1/audio/files/{file_id}/download` | Download saved file |
-| `GET`  | `/` | Web UI Testing Interface |
-
+| Method | Endpoint                             | Description                                       |
+| ------ | ------------------------------------ | ------------------------------------------------- |
+| `POST` | `/v1/audio/speech`                   | OpenAI-compatible TTS (streaming & non-streaming) |
+| `POST` | `/v1/audio/transcriptions`           | OpenAI-compatible ASR transcription               |
+| `POST` | `/v1/audio/translations`             | OpenAI-compatible transliteration/translation     |
+| `GET`  | `/v1/models`                         | List available models                             |
+| `GET`  | `/v1/audio/voices`                   | Catalog of 44 voices & styles                     |
+| `GET`  | `/v1/audio/languages`                | Supported Indic languages                         |
+| `GET`  | `/v1/audio/files`                    | List saved audio and transcript files             |
+| `GET`  | `/v1/audio/files/{file_id}`          | Play or retrieve saved file                       |
+| `GET`  | `/v1/audio/files/{file_id}/download` | Download saved file                               |
+| `GET`  | `/`                                  | Web UI Testing Interface                          |
