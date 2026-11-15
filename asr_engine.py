@@ -1,297 +1,310 @@
-"""Indic-Transcribe Automatic Speech Recognition (ASR) Engine
-Supports 27 Indic languages + English, auto language detection, short and long-form transcription,
-timestamped segments, and OpenAI Whisper API compatibility (/v1/audio/transcriptions & translations).
+"""Automatic Speech Recognition engine.
+
+Adapters:
+  indic-transcribe   bodhan-ai/indic-transcribe-core   Indic Canary (MPS / CUDA / CPU)
+  whisper-mlx        mlx-community/whisper-*           mlx-whisper on Apple Silicon
+  transformers-asr   any HF ASR pipeline               Whisper (PyTorch), wav2vec2, ...
+
+Every adapter takes mono float32 audio at 16 kHz and returns
+`{"language", "text", "segments": [{"id", "seek", "start", "end", "text"}]}`.
 """
 from __future__ import annotations
 
-import io
-import json
 import logging
-import os
-import subprocess
 import sys
-import time
-import uuid
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 
 import numpy as np
-import soundfile as sf
-import torch
-import torchaudio
-from huggingface_hub import snapshot_download
+
+from audio_utils import ASR_SR, format_srt, format_vtt
+from model_manager import ModelError
+from transliterate import romanise
 
 logger = logging.getLogger("asr_engine")
-logging.basicConfig(level=logging.INFO)
 
-TARGET_SR = 16_000
+TARGET_SR = ASR_SR
 
-# Supported languages in Indic-Transcribe
+# Languages of bodhan-ai/indic-transcribe-core (26 Indic + English) plus auto-detect.
 LANGUAGES_CATALOG = {
     "auto": "Auto-detect",
-    "as": "Assamese",
-    "bgc": "Haryanvi",
-    "bhb": "Bhilali",
-    "bho": "Bhojpuri",
-    "bn": "Bengali",
-    "brx": "Bodo",
-    "doi": "Dogri",
-    "en": "English",
-    "gu": "Gujarati",
-    "hi": "Hindi",
-    "hne": "Chhattisgarhi",
-    "kn": "Kannada",
-    "kok": "Konkani",
-    "ks": "Kashmiri",
-    "mai": "Maithili",
-    "ml": "Malayalam",
-    "mni": "Manipuri",
-    "mr": "Marathi",
-    "ne": "Nepali",
-    "or": "Odia",
-    "pa": "Punjabi",
-    "sa": "Sanskrit",
-    "sat": "Santali",
-    "sd": "Sindhi",
-    "ta": "Tamil",
-    "te": "Telugu",
-    "ur": "Urdu",
+    "as": "Assamese", "bgc": "Haryanvi", "bhb": "Bhilali", "bho": "Bhojpuri", "bn": "Bengali",
+    "brx": "Bodo", "doi": "Dogri", "en": "English", "gu": "Gujarati", "hi": "Hindi",
+    "hne": "Chhattisgarhi", "kn": "Kannada", "kok": "Konkani", "ks": "Kashmiri", "mai": "Maithili",
+    "ml": "Malayalam", "mni": "Manipuri", "mr": "Marathi", "ne": "Nepali", "or": "Odia",
+    "pa": "Punjabi", "sa": "Sanskrit", "sat": "Santali", "sd": "Sindhi", "ta": "Tamil",
+    "te": "Telugu", "ur": "Urdu",
 }
-
 MODES = ["native", "mixed", "romanised"]
+RESPONSE_FORMATS = ("json", "text", "verbose_json", "srt", "vtt")
 
 
-def seconds_to_srt_time(seconds: float) -> str:
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
-    return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
+def normalize_mode(mode: Optional[str]) -> str:
+    m = (mode or "native").strip().lower()
+    if m in ("mixed", "itn"):
+        return "mixed"
+    if m.startswith("roman"):
+        return "romanised"
+    return "native"
 
 
-def seconds_to_vtt_time(seconds: float) -> str:
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
-    return f"{hrs:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
+def normalize_language(language: Optional[str]) -> Optional[str]:
+    lang = (language or "").strip().lower()
+    return None if lang in ("", "auto", "none", "detect") else lang
 
 
-def format_srt(segments: List[dict]) -> str:
-    lines = []
-    for i, seg in enumerate(segments, 1):
-        lines.append(f"{i}")
-        lines.append(f"{seconds_to_srt_time(seg['start'])} --> {seconds_to_srt_time(seg['end'])}")
-        lines.append(seg["text"].strip())
-        lines.append("")
-    return "\n".join(lines).strip()
+def _torch_device() -> str:
+    import torch
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def format_vtt(segments: List[dict]) -> str:
-    lines = ["WEBVTT", ""]
-    for i, seg in enumerate(segments, 1):
-        lines.append(f"{i}")
-        lines.append(f"{seconds_to_vtt_time(seg['start'])} --> {seconds_to_vtt_time(seg['end'])}")
-        lines.append(seg["text"].strip())
-        lines.append("")
-    return "\n".join(lines).strip()
+def _segment(idx: int, start: float, end: float, text: str) -> dict:
+    return {"id": idx, "seek": int(start * TARGET_SR), "start": round(float(start), 3),
+            "end": round(float(end), 3), "text": text.strip()}
 
 
-class ASREngine:
-    def __init__(self, data_dir: str = "data"):
-        self.data_dir = Path(data_dir)
-        self.transcriptions_dir = self.data_dir / "transcriptions"
-        self.transcriptions_dir.mkdir(parents=True, exist_ok=True)
+# ----------------------------------------------------------------------------
+# Adapters
+# ----------------------------------------------------------------------------
+class ASRAdapter:
+    name = "base"
+    engine = "base"
+    supports_translation = False
 
-        self.hf_token = os.getenv("HF_TOKEN")
-        self.asr = None
-        self.split_on_silence_fn = None
-        self.identify_long_fn = None
-        self.decode_guarded_fn = None
-        self.device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    @classmethod
+    def catalog(cls) -> dict:
+        return {"languages": {"auto": "Auto-detect"}, "modes": ["native"]}
 
-    def load_model(self):
-        """Preload Indic-Transcribe checkpoint into memory."""
-        if self.asr is not None:
-            return
-        logger.info("Loading Indic-Transcribe-Core model (bodhan-ai/indic-transcribe-core)...")
-        asr_dir = snapshot_download("bodhan-ai/indic-transcribe-core", token=self.hf_token)
-        sys.path.insert(0, str(asr_dir))
+    def load(self, local_dir: str, spec: dict, token: Optional[str]) -> None:
+        raise NotImplementedError
 
-        from indic_transcribe import IndicTranscribe
-        from long_form import split_on_silence, identify_long, _decode_guarded
+    def unload(self) -> None:
+        for attr in list(vars(self)):
+            setattr(self, attr, None)
 
-        self.asr = IndicTranscribe.from_pretrained(asr_dir, device=self.device)
-        self.split_on_silence_fn = split_on_silence
-        self.identify_long_fn = identify_long
-        self.decode_guarded_fn = _decode_guarded
-        logger.info(f"Indic-Transcribe loaded on device {self.device}.")
+    def transcribe(self, wav: np.ndarray, language: Optional[str], mode: str, task: str,
+                   temperature: float, prompt: Optional[str], chunk_seconds: float) -> dict:
+        raise NotImplementedError
 
-    def load_audio(self, audio_source: Union[str, bytes, io.IOBase]) -> torch.Tensor:
-        """Load any audio input into a mono 16kHz float32 torch.Tensor."""
-        if isinstance(audio_source, str) and os.path.exists(audio_source):
-            with open(audio_source, "rb") as f:
-                raw_bytes = f.read()
-        elif isinstance(audio_source, bytes):
-            raw_bytes = audio_source
-        elif hasattr(audio_source, "read"):
-            raw_bytes = audio_source.read()
-        else:
-            raise ValueError("Unsupported audio source type")
 
-        # 1. Try reading with soundfile
+class IndicTranscribe(ASRAdapter):
+    name = "indic-transcribe"
+    engine = "pytorch"
+
+    @classmethod
+    def catalog(cls) -> dict:
+        return {"languages": LANGUAGES_CATALOG, "modes": MODES}
+
+    def load(self, local_dir, spec, token):
+        import importlib
+        if local_dir in sys.path:
+            sys.path.remove(local_dir)
+        sys.path.insert(0, local_dir)
+        self._module = importlib.import_module("indic_transcribe")
+        self._long = importlib.import_module("long_form")
+        self.device = _torch_device()
+        self.asr = self._module.IndicTranscribe.from_pretrained(local_dir, device=self.device)
+
+    def transcribe(self, wav, language, mode, task, temperature, prompt, chunk_seconds):
+        import torch
+        audio = torch.from_numpy(np.ascontiguousarray(wav))
+        lang = language if language in LANGUAGES_CATALOG and language != "auto" else None
+        if language and lang is None:
+            logger.warning("Language '%s' is not supported by indic-transcribe; auto-detecting.", language)
+        if task == "translate":
+            mode = "romanised"          # this checkpoint transliterates; it has no translation head
+        if lang is None:
+            lang = self._long.identify_long(self.asr, audio)
+
+        gen_kw = {"max_new_tokens": 512}
+        if temperature and temperature > 0:
+            gen_kw.update(do_sample=True, temperature=float(temperature))
+
+        # The checkpoint trains on <=30 s clips; longer single passes collapse into
+        # repetition, so cut at pauses and decode each piece (guarded against repeats).
+        hard_max = max(5.0, min(float(chunk_seconds or 30.0), 30.0))
+        cuts = self._long.split_on_silence(audio, sr=TARGET_SR, target=hard_max * 0.8, hard_max=hard_max)
+        segments: List[dict] = []
+        for a, b in cuts:
+            piece = audio[a:b]
+            if piece.numel() < 1600:    # < 0.1 s
+                continue
+            text = self._long._decode_guarded(self.asr, piece, lang, mode, dict(gen_kw)).strip()
+            if text:
+                segments.append(_segment(len(segments), a / TARGET_SR, b / TARGET_SR, text))
+        # This checkpoint emits native script whatever the prompt asks for (see its model
+        # card), so romanised output is finished here by rule-based ISO 15919 transliteration.
+        delivered = "native"
+        if mode == "romanised":
+            for seg in segments:
+                seg["text"], changed = romanise(seg["text"])
+                delivered = "romanised" if changed else delivered
+        return {"language": lang, "text": " ".join(s["text"] for s in segments), "segments": segments,
+                "mode": delivered}
+
+
+class WhisperMLX(ASRAdapter):
+    name = "whisper-mlx"
+    engine = "mlx"
+    supports_translation = True
+
+    @classmethod
+    def catalog(cls) -> dict:
         try:
-            data, sr = sf.read(io.BytesIO(raw_bytes), dtype="float32", always_2d=True)
-            wav = torch.as_tensor(data).mean(dim=1)
-            if sr != TARGET_SR:
-                wav = torchaudio.functional.resample(wav, sr, TARGET_SR)
-            return wav
+            from mlx_whisper.tokenizer import LANGUAGES
+            langs = {"auto": "Auto-detect", **{k: v.title() for k, v in sorted(LANGUAGES.items(), key=lambda kv: kv[1])}}
+        except Exception:
+            langs = {"auto": "Auto-detect", "en": "English", "hi": "Hindi"}
+        return {"languages": langs, "modes": ["native"]}
+
+    def load(self, local_dir, spec, token):
+        try:
+            import mlx.core as mx
+            import mlx_whisper  # noqa: F401
+            from mlx_whisper.load_models import load_model
+        except ImportError:
+            raise ModelError("mlx-whisper is not installed. Run: pip install mlx-whisper",
+                             status=501, code="backend_unavailable")
+        self.path = local_dir
+        self.model = load_model(local_dir, dtype=mx.float16)
+
+    def unload(self):
+        try:
+            holder = sys.modules["mlx_whisper.transcribe"].ModelHolder
+            if holder.model is self.model:
+                holder.model, holder.model_path = None, None
         except Exception:
             pass
+        super().unload()
 
-        # 2. Fallback to ffmpeg pipe for WebM/Opus/AAC/M4A/MP3
+    def transcribe(self, wav, language, mode, task, temperature, prompt, chunk_seconds):
+        import mlx_whisper
+        holder = sys.modules["mlx_whisper.transcribe"].ModelHolder
+        holder.model, holder.model_path = self.model, self.path     # reuse our resident weights
+        kw = {}
+        if temperature and temperature > 0:
+            kw["temperature"] = float(temperature)
+        result = mlx_whisper.transcribe(
+            np.ascontiguousarray(wav, dtype=np.float32), path_or_hf_repo=self.path, language=language,
+            task="translate" if task == "translate" else "transcribe", initial_prompt=prompt or None,
+            verbose=None, **kw)
+        segments = [_segment(i, s["start"], s["end"], s["text"]) for i, s in enumerate(result.get("segments", []))
+                    if s.get("text", "").strip()]
+        return {"language": result.get("language") or language, "text": result.get("text", "").strip(), "segments": segments}
+
+
+class TransformersASR(ASRAdapter):
+    """Generic Hugging Face ASR pipeline. Whisper checkpoints get language ID and translation."""
+    name = "transformers-asr"
+    engine = "transformers"
+
+    @classmethod
+    def catalog(cls) -> dict:
         try:
-            cmd = [
-                "ffmpeg", "-nostdin", "-loglevel", "error",
-                "-i", "pipe:0",
-                "-f", "f32le", "-acodec", "pcm_f32le",
-                "-ac", "1", "-ar", str(TARGET_SR),
-                "pipe:1"
-            ]
-            proc = subprocess.run(cmd, input=raw_bytes, capture_output=True, check=True)
-            wav_np = np.frombuffer(proc.stdout, dtype=np.float32)
-            return torch.from_numpy(wav_np)
+            from transformers.models.whisper.tokenization_whisper import LANGUAGES
+            langs = {"auto": "Auto-detect", **{k: v.title() for k, v in sorted(LANGUAGES.items(), key=lambda kv: kv[1])}}
+        except Exception:
+            langs = {"auto": "Auto-detect"}
+        return {"languages": langs, "modes": ["native"]}
+
+    def load(self, local_dir, spec, token):
+        import torch
+        from transformers import pipeline
+        self.device = _torch_device()
+        dtype = torch.float16 if self.device in ("mps", "cuda") and spec.get("quantization") in ("fp16", "bf16") else torch.float32
+        self.pipe = pipeline("automatic-speech-recognition", model=local_dir, device=self.device, dtype=dtype)
+        self.is_whisper = self.pipe.model.config.model_type == "whisper"
+        self.supports_translation = self.is_whisper
+
+    def _detect_language(self, wav: np.ndarray) -> Optional[str]:
+        import torch
+        try:
+            feats = self.pipe.feature_extractor(wav[: 30 * TARGET_SR], sampling_rate=TARGET_SR, return_tensors="pt").input_features
+            feats = feats.to(self.pipe.model.device, dtype=self.pipe.model.dtype)
+            with torch.no_grad():
+                token_id = self.pipe.model.detect_language(feats)[0].item()
+            return self.pipe.tokenizer.decode([token_id]).strip("<|>") or None
         except Exception as e:
-            logger.error(f"FFmpeg decoding failed: {e}")
-            raise ValueError(f"Could not decode audio with SoundFile or FFmpeg: {e}")
+            logger.warning("Whisper language detection failed: %s", e)
+            return None
 
-    def transcribe(
-        self,
-        audio_source: Union[str, bytes, io.IOBase],
-        language: Optional[str] = None,
-        mode: str = "native",
-        response_format: str = "json",
-        temperature: float = 0.0,
-        save_file: bool = True,
-        filename: Optional[str] = None,
-    ) -> Union[dict, str]:
-        """Transcribe audio with segment timestamps and return requested OpenAI format."""
-        if self.asr is None:
-            self.load_model()
+    def transcribe(self, wav, language, mode, task, temperature, prompt, chunk_seconds):
+        wav = np.ascontiguousarray(wav, dtype=np.float32)
+        duration = len(wav) / TARGET_SR
+        call_kw: Dict[str, object] = {}
+        if duration > 30.0:
+            call_kw["chunk_length_s"] = 30
+        if self.is_whisper:
+            if language is None:
+                language = self._detect_language(wav)
+            gen_kw: Dict[str, object] = {"task": "translate" if task == "translate" else "transcribe"}
+            if language:
+                gen_kw["language"] = language
+            if temperature and temperature > 0:
+                gen_kw.update(do_sample=True, temperature=float(temperature))
+            call_kw.update(return_timestamps=True, generate_kwargs=gen_kw)
+        out = self.pipe({"raw": wav, "sampling_rate": TARGET_SR}, **call_kw)
+        text = (out.get("text") or "").strip()
+        segments: List[dict] = []
+        for chunk in out.get("chunks") or []:
+            start, end = chunk.get("timestamp") or (None, None)
+            piece = (chunk.get("text") or "").strip()
+            if piece:
+                start = float(start) if start is not None else (segments[-1]["end"] if segments else 0.0)
+                segments.append(_segment(len(segments), start, float(end) if end is not None else duration, piece))
+        if not segments and text:
+            segments = [_segment(0, 0.0, duration, text)]
+        return {"language": language or "unknown", "text": text, "segments": segments}
 
-        wav = self.load_audio(audio_source)
-        total_samples = wav.shape[-1]
-        duration_s = total_samples / TARGET_SR
 
-        # Validate / normalize language
-        lang = language.strip().lower() if language else None
-        if lang in ("auto", "none", "", "detect"):
-            lang = None
+ADAPTERS = {cls.name: cls for cls in (IndicTranscribe, WhisperMLX, TransformersASR)}
 
-        if lang and lang not in LANGUAGES_CATALOG:
-            logger.warning(f"Language '{lang}' is not in catalog. Falling back to auto-detect.")
-            lang = None
 
-        # Mode normalization
-        norm_mode = mode.lower()
-        if norm_mode not in MODES:
-            if norm_mode in ("itn", "mixed"):
-                norm_mode = "mixed"
-            elif "roman" in norm_mode:
-                norm_mode = "romanised"
-            else:
-                norm_mode = "native"
+def create_adapter(spec: dict) -> ASRAdapter:
+    cls = ADAPTERS.get(spec.get("adapter") or "")
+    if cls is None:
+        raise ModelError(f"Unknown ASR adapter '{spec.get('adapter')}' for model '{spec['id']}'.",
+                         status=501, code="adapter_not_found")
+    return cls()
 
-        # Determine language if auto-detect requested
-        detected_lang = lang
-        if detected_lang is None:
-            detected_lang = self.identify_long_fn(self.asr, wav)
-            logger.info(f"Auto-detected language: {detected_lang}")
 
-        # Split into segments for long audio or for fine-grained timestamping
-        # If <= 30 seconds and standard json/text format requested without timestamps, direct call
-        segments = []
-        is_short = duration_s <= 30.0
+def catalog_for(spec: dict) -> dict:
+    cls = ADAPTERS.get(spec.get("adapter") or "", ASRAdapter)
+    return cls.catalog()
 
-        if is_short and response_format in ("json", "text"):
-            text = self.asr.transcribe(wav, lang=detected_lang, mode=norm_mode)
-            full_text = text.strip() if isinstance(text, str) else text[0].strip()
-            segments.append({
-                "id": 0,
-                "seek": 0,
-                "start": 0.0,
-                "end": round(duration_s, 3),
-                "text": full_text
-            })
-        else:
-            # Cut at pauses (target 15-25s, max 30s)
-            cuts = self.split_on_silence_fn(wav, sr=TARGET_SR, target=20.0, hard_max=30.0)
-            text_parts = []
-            for idx, (a, b) in enumerate(cuts):
-                piece = wav[a:b]
-                if piece.numel() < 1600:  # Skip < 0.1s
-                    continue
-                start_sec = round(a / TARGET_SR, 3)
-                end_sec = round(b / TARGET_SR, 3)
-                piece_text = self.decode_guarded_fn(
-                    self.asr, piece, detected_lang, norm_mode, {"max_new_tokens": 512}
-                ).strip()
-                if piece_text:
-                    text_parts.append(piece_text)
-                    segments.append({
-                        "id": idx,
-                        "seek": a,
-                        "start": start_sec,
-                        "end": end_sec,
-                        "text": piece_text
-                    })
-            full_text = " ".join(text_parts)
 
-        # Save record if requested
-        file_id = f"asr_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-        if save_file:
-            try:
-                record = {
-                    "id": file_id,
-                    "filename": filename or f"{file_id}.wav",
-                    "language": detected_lang,
-                    "mode": norm_mode,
-                    "duration": round(duration_s, 3),
-                    "text": full_text,
-                    "segments": segments,
-                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                with open(self.transcriptions_dir / f"{file_id}.json", "w", encoding="utf-8") as f:
-                    json.dump(record, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"Could not save transcription record: {e}")
+# ----------------------------------------------------------------------------
+# Transcription + output formatting (model-agnostic)
+# ----------------------------------------------------------------------------
+def transcribe(adapter: ASRAdapter, wav: np.ndarray, language: Optional[str] = None, mode: str = "native",
+               task: str = "transcribe", temperature: float = 0.0, prompt: Optional[str] = None,
+               chunk_seconds: float = 30.0) -> dict:
+    """Run a transcription. Returns the verbose record (task, language, duration, text, segments)."""
+    duration = len(wav) / TARGET_SR
+    if duration < 0.1:
+        raise ModelError("Audio is too short to transcribe (under 0.1 s).", param="file")
+    result = adapter.transcribe(wav, normalize_language(language), normalize_mode(mode), task,
+                                float(temperature or 0.0), prompt, chunk_seconds)
+    return {
+        "task": task,
+        "language": result["language"],
+        "duration": round(duration, 3),
+        "text": result["text"],
+        "segments": result["segments"],
+        "mode": "english" if task == "translate" and adapter.supports_translation else result.get("mode", "native"),
+    }
 
-        # Format output according to OpenAI response_format
-        fmt = response_format.lower()
-        if fmt == "text":
-            return full_text
-        elif fmt == "srt":
-            return format_srt(segments)
-        elif fmt == "vtt":
-            return format_vtt(segments)
-        elif fmt == "verbose_json":
-            return {
-                "task": "transcribe",
-                "language": detected_lang,
-                "duration": round(duration_s, 3),
-                "text": full_text,
-                "segments": segments
-            }
-        else:  # default "json"
-            return {"text": full_text}
 
-    def list_saved_transcriptions(self) -> list[dict]:
-        """List all saved transcriptions."""
-        items = []
-        for meta_file in sorted(self.transcriptions_dir.glob("*.json"), key=os.path.getmtime, reverse=True):
-            try:
-                with open(meta_file, "r", encoding="utf-8") as f:
-                    items.append(json.load(f))
-            except Exception:
-                continue
-        return items
+def format_transcript(record: dict, response_format: str):
+    """Render a verbose record as (body, media_type) in an OpenAI response format."""
+    fmt = (response_format or "json").lower()
+    if fmt == "text":
+        return record["text"], "text/plain; charset=utf-8"
+    if fmt == "srt":
+        return format_srt(record["segments"]), "application/x-subrip; charset=utf-8"
+    if fmt == "vtt":
+        return format_vtt(record["segments"]), "text/vtt; charset=utf-8"
+    if fmt == "verbose_json":
+        return {k: record[k] for k in ("task", "language", "duration", "text", "segments")}, "application/json"
+    return {"text": record["text"]}, "application/json"

@@ -1,31 +1,36 @@
-"""Indic-Speak Text-to-Speech Engine
-Supports both MLX (Apple Silicon accelerated, real-time streaming) and PyTorch (MPS/CPU)
-Provides OpenAI speech API compatibility (/v1/audio/speech)
+"""Text-to-Speech engine.
+
+Adapters wrap one model family each behind a common interface; `synthesize` and
+`stream_synthesis` add the model-agnostic parts (sentence chunking, silence
+trimming, speed, 24 kHz output).
+
+Adapters:
+  indic-speak-mlx    iniquitous/indic-speak-mlx-bf16   MLX LM + SNAC/Vocos, real-time streaming
+  indic-speak-torch  bodhan-ai/indic-speak             PyTorch (MPS / CUDA / CPU)
+  kokoro             hexgrad/Kokoro-82M                optional `kokoro` package
+  transformers-tts   any HF text-to-speech pipeline    MMS-TTS / VITS, Bark, ...
 """
 from __future__ import annotations
 
-import io
-import json
 import logging
-import os
-import struct
+import re
 import sys
+import threading
 import time
-import uuid
-from pathlib import Path
-from typing import AsyncGenerator, Generator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
-import soundfile as sf
-import torch
-from huggingface_hub import snapshot_download
+
+from audio_utils import TTS_SR, change_speed, resample
+from model_manager import ModelError
 
 logger = logging.getLogger("tts_engine")
-logging.basicConfig(level=logging.INFO)
 
-SR = 24_000
+SR = TTS_SR
 
-# Voice catalog from bodhan-ai/indic-speak
+# ----------------------------------------------------------------------------
+# Indic-Speak catalog (44 first-party voices, 22 languages)
+# ----------------------------------------------------------------------------
 VOICE_CATALOG = {
     "Prastuti": {"gender": "Female", "lang": "as", "lang_name": "Assamese", "desc": "Warm mid register with animated inflection"},
     "Ankur": {"gender": "Male", "lang": "as", "lang_name": "Assamese", "desc": "Deep voice with resonant chest tone"},
@@ -73,326 +78,404 @@ VOICE_CATALOG = {
     "Zaid": {"gender": "Male", "lang": "ur", "lang_name": "Urdu", "desc": "Deep, refined, formal weight"},
 }
 
-# Standard OpenAI voice aliases mapping
 OPENAI_VOICE_MAP = {
-    "alloy": "Amit",
-    "echo": "Arun",
-    "fable": "Deepika",
-    "onyx": "Vamsi",
-    "nova": "Kavya",
-    "shimmer": "Sravani",
+    "alloy": "Amit", "echo": "Arun", "fable": "Deepika",
+    "onyx": "Vamsi", "nova": "Kavya", "shimmer": "Sravani",
 }
 
-# Available styles / emotions
+# Style names accepted by the API. NEUTRAL means "no style tag".
 AVAILABLE_STYLES = [
-    "NEUTRAL",
-    "HAPPY",
-    "SAD",
-    "ANGER",
-    "FEAR",
-    "SURPRISE",
-    "DISGUST",
-    "news",
-    "AIR style news",
-    "TV style news",
-    "advertisements",
-    "children's stories",
-    "educational lecture",
-    "Customer Care",
-    "single person narration audiobook",
+    "NEUTRAL", "HAPPY", "SAD", "ANGER", "FEAR", "SURPRISE", "DISGUST",
+    "news", "AIR style news", "TV style news", "advertisements", "children's stories",
+    "educational lecture", "Customer Care", "single person narration audiobook",
 ]
-
-def make_streaming_wav_header(sample_rate: int = SR, num_channels: int = 1, bits_per_sample: int = 16) -> bytes:
-    """Generate a 44-byte WAV header configured for indefinite streaming (0xFFFFFFFF length fields)."""
-    byte_rate = sample_rate * num_channels * (bits_per_sample // 8)
-    block_align = num_channels * (bits_per_sample // 8)
-    return struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        0xFFFFFFFF,  # Streaming file size
-        b"WAVE",
-        b"fmt ",
-        16,          # Subchunk1Size
-        1,           # AudioFormat (PCM)
-        num_channels,
-        sample_rate,
-        byte_rate,
-        block_align,
-        bits_per_sample,
-        b"data",
-        0xFFFFFFFF   # Streaming data size
-    )
+# The checkpoint was trained on these exact tag spellings (see the repo's voices.md).
+_STYLE_TAGS = {s.lower(): s for s in AVAILABLE_STYLES[7:]}
+_STYLE_TAGS.update({e: e for e in ("happy", "sad", "anger", "fear", "surprise", "disgust")})
 
 
-class TTSEngine:
-    def __init__(self, data_dir: str = "data"):
-        self.data_dir = Path(data_dir)
-        self.generated_dir = self.data_dir / "generated"
-        self.generated_dir.mkdir(parents=True, exist_ok=True)
+def normalize_style(style: Optional[str]) -> str:
+    """API style name -> the tag the model was trained with ('' = no style block)."""
+    s = (style or "").strip()
+    if not s or s.lower() in ("neutral", "none", "default"):
+        return ""
+    return _STYLE_TAGS.get(s.lower(), s)
 
-        self.hf_token = os.getenv("HF_TOKEN")
-        self.mlx_tts = None
-        self.torch_tts = None
-        self.speak_long_fn = None
-        self.stream_long_fn = None
 
-        self._has_mlx = False
-        try:
-            import mlx.core as mx
-            self._has_mlx = True
-        except ImportError:
-            self._has_mlx = False
+# ----------------------------------------------------------------------------
+# Text chunking
+# ----------------------------------------------------------------------------
+_SENT_SPLIT = re.compile(r"(?<=[।॥.!?])\s+|\n+")
+_CLAUSE_SPLIT = re.compile(r"(?<=[,;:،—])\s+")
+MAX_SENTENCE_CHARS = 220   # ~18 s of speech; a single generation is capped near 25 s
 
-    def load_models(self):
-        """Preload the fastest available TTS model (MLX on Mac or PyTorch)."""
-        logger.info("Initializing TTS engine...")
-        if self._has_mlx:
-            try:
-                logger.info("Loading MLX TTS model (iniquitous/indic-speak-mlx-bf16)...")
-                tts_mlx_dir = snapshot_download("iniquitous/indic-speak-mlx-bf16", token=self.hf_token)
-                sys.path.insert(0, str(tts_mlx_dir))
-                from tts_mlx import MLXTTS, speak_long, stream_long
 
-                self.mlx_tts = MLXTTS(tts_mlx_dir)
-                self.speak_long_fn = speak_long
-                self.stream_long_fn = stream_long
-                logger.info("MLX TTS model loaded successfully.")
-            except Exception as e:
-                logger.warning(f"Failed to load MLX TTS: {e}. Falling back to PyTorch TTS.")
+def split_text(text: str, max_chars: int = MAX_SENTENCE_CHARS) -> List[str]:
+    """Split text into sentence-sized chunks the models can synthesise without truncating.
 
-        if self.mlx_tts is None:
-            self._load_torch_tts()
+    Sentences are cut at ।.!? and newlines; a sentence longer than `max_chars` is cut
+    again at clause punctuation, then at spaces.
+    """
+    out: List[str] = []
+    for sent in (p.strip() for p in _SENT_SPLIT.split(text.strip())):
+        if not sent:
+            continue
+        if len(sent) <= max_chars:
+            out.append(sent)
+            continue
+        current = ""
+        for clause in _CLAUSE_SPLIT.split(sent):
+            while len(clause) > max_chars:             # no punctuation at all: cut at a space
+                cut = clause.rfind(" ", 0, max_chars)
+                cut = cut if cut > max_chars // 2 else max_chars
+                if current:
+                    out.append(current)
+                    current = ""
+                out.append(clause[:cut].strip())
+                clause = clause[cut:].strip()
+            if current and len(current) + 1 + len(clause) > max_chars:
+                out.append(current)
+                current = clause
+            else:
+                current = f"{current} {clause}".strip()
+        if current:
+            out.append(current)
+    return out
 
-    def _load_torch_tts(self):
-        """Loads PyTorch Indic-Speak TTS model."""
-        if self.torch_tts is not None:
-            return
-        logger.info("Loading PyTorch TTS model (bodhan-ai/indic-speak)...")
-        tts_dir = snapshot_download("bodhan-ai/indic-speak", token=self.hf_token)
-        sys.path.insert(0, str(tts_dir))
-        from inference import TTS
 
-        device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
-        self.torch_tts = TTS(tts_dir, device=device)
-        logger.info(f"PyTorch TTS model loaded on {device}.")
+def trim_silence(wav: np.ndarray, sr: int = SR, thr: float = 0.01, keep_s: float = 0.15) -> np.ndarray:
+    """Cut leading/trailing near-silence, keeping `keep_s` of padding."""
+    frame = sr // 50
+    n = len(wav) // frame * frame
+    if n == 0:
+        return wav
+    loud = np.abs(wav[:n]).reshape(-1, frame).max(1) > thr
+    if not loud.any():
+        return wav[: int(keep_s * sr)]
+    pad = int(keep_s * sr)
+    i0 = max(0, int(np.argmax(loud)) * frame - pad)
+    i1 = min(len(wav), (len(loud) - int(np.argmax(loud[::-1]))) * frame + pad)
+    return wav[i0:i1]
+
+
+def _token_cap(sentence: str) -> int:
+    """~98 audio tokens per second, ~12 chars per second; allow 2x plus a 3 s floor."""
+    return min(int((2 * len(sentence) / 12 + 3) * 98), 2520)
+
+
+def _import_from(directory: str, module: str):
+    """Import a helper module that ships inside a model repo."""
+    import importlib
+    cached = sys.modules.get(module)
+    if cached is not None and not str(getattr(cached, "__file__", "")).startswith(directory):
+        del sys.modules[module]        # a same-named module from another repo
+    if directory in sys.path:
+        sys.path.remove(directory)
+    sys.path.insert(0, directory)
+    return importlib.import_module(module)
+
+
+def _torch_device() -> str:
+    import torch
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# ----------------------------------------------------------------------------
+# Adapters
+# ----------------------------------------------------------------------------
+class TTSAdapter:
+    name = "base"
+    engine = "base"
+    sample_rate = SR
+    default_voice = "default"
+    native_speed = False        # adapter applies `speed` itself
+    chunk_text = True           # False: adapter does its own long-text handling
+
+    @classmethod
+    def catalog(cls) -> dict:
+        return {"voices": {"default": {"gender": "", "lang": "", "lang_name": "", "desc": "Model default voice"}},
+                "openai_aliases": {}, "styles": [], "default_voice": "default"}
+
+    def load(self, local_dir: str, spec: dict, token: Optional[str]) -> None:
+        raise NotImplementedError
+
+    def unload(self) -> None:
+        for attr in list(vars(self)):
+            setattr(self, attr, None)
 
     def resolve_voice(self, voice: Optional[str]) -> str:
-        """Map OpenAI voice name or case-insensitive voice name to a standard Indic voice."""
-        if not voice:
-            return "Amit"
+        cat = self.catalog()
+        name = (voice or "").strip()
+        if not name:
+            return cat["default_voice"]
+        low = name.lower()
+        if low in cat["openai_aliases"]:
+            return cat["openai_aliases"][low]
+        for v in cat["voices"]:
+            if v.lower() == low:
+                return v
+        logger.warning("Voice '%s' is not available for %s; using '%s'", voice, self.name, cat["default_voice"])
+        return cat["default_voice"]
 
-        voice_clean = voice.strip()
-        voice_lower = voice_clean.lower()
+    def synth_sentence(self, text: str, voice: str, style: str, params: dict) -> Tuple[np.ndarray, dict]:
+        """One utterance -> (float32 mono @ self.sample_rate, stats)."""
+        raise NotImplementedError
 
-        # Check OpenAI mapping first
-        if voice_lower in OPENAI_VOICE_MAP:
-            return OPENAI_VOICE_MAP[voice_lower]
+    def stream_sentence(self, text: str, voice: str, style: str, params: dict) -> Iterator[np.ndarray]:
+        wav, _ = self.synth_sentence(text, voice, style, params)
+        step = self.sample_rate // 2
+        for i in range(0, len(wav), step):
+            yield wav[i:i + step]
 
-        # Check exact catalog match
-        for catalog_voice in VOICE_CATALOG:
-            if catalog_voice.lower() == voice_lower:
-                return catalog_voice
 
-        # Default fallback
-        logger.warning(f"Voice '{voice}' not found, falling back to 'Amit'")
-        return "Amit"
+class _IndicSpeakBase(TTSAdapter):
+    @classmethod
+    def catalog(cls) -> dict:
+        return {"voices": VOICE_CATALOG, "openai_aliases": OPENAI_VOICE_MAP,
+                "styles": AVAILABLE_STYLES, "default_voice": "Amit"}
 
-    def adjust_speed(self, wav: np.ndarray, speed: float) -> np.ndarray:
-        """Adjust playback speed by resampling (speed > 1 speeds up, speed < 1 slows down)."""
-        if abs(speed - 1.0) < 0.02:
-            return wav
-        speed = max(0.25, min(speed, 4.0))
-        wav_tensor = torch.from_numpy(wav).unsqueeze(0)
-        orig_sr = int(SR * speed)
-        import torchaudio
-        resampled = torchaudio.functional.resample(wav_tensor, orig_sr, SR)
-        return resampled.squeeze(0).numpy()
 
-    def synthesize(
-        self,
-        text: str,
-        voice: str = "Amit",
-        style: str = "NEUTRAL",
-        speed: float = 1.0,
-        model_name: str = "indic-speak-mlx",
-    ) -> Tuple[np.ndarray, dict]:
-        """Synthesize text to float32 numpy audio @ 24kHz. Returns (wav, stats)."""
-        resolved_voice = self.resolve_voice(voice)
-        use_torch = "torch" in model_name.lower() or (self.mlx_tts is None)
+class IndicSpeakMLX(_IndicSpeakBase):
+    name = "indic-speak-mlx"
+    engine = "mlx"
 
-        t0 = time.time()
-        if use_torch:
-            self._load_torch_tts()
-            wav = self.torch_tts(text=text, speaker=resolved_voice, style=style, temperature=0.6)
-            total_time = time.time() - t0
-            stats = {
-                "total_s": total_time,
-                "audio_s": len(wav) / SR,
-                "rtf": total_time / max(len(wav) / SR, 1e-4),
-                "engine": "pytorch"
-            }
-        else:
-            if "\n" in text or len(text) > 80:
-                wav, stats_list = self.speak_long_fn(
-                    self.mlx_tts, text, speaker=resolved_voice, style=style, temperature=0.6
-                )
-            else:
-                wav, single_stats = self.mlx_tts(
-                    text, speaker=resolved_voice, style=style, temperature=0.6
-                )
-                stats_list = [single_stats]
+    def load(self, local_dir, spec, token):
+        try:
+            import mlx.core  # noqa: F401
+        except ImportError:
+            raise ModelError("MLX is not installed; indic-speak-mlx needs Apple Silicon. Use indic-speak-torch instead.",
+                             status=501, code="backend_unavailable")
+        _import_from(local_dir, "inference")
+        module = _import_from(local_dir, "tts_mlx")
+        self.tts = module.MLXTTS(local_dir, decode_device=_torch_device())
 
-            total_time = time.time() - t0
-            stats = {
-                "total_s": total_time,
-                "audio_s": len(wav) / SR,
-                "rtf": total_time / max(len(wav) / SR, 1e-4),
-                "engine": "mlx"
-            }
+    def _kwargs(self, text, params):
+        kw = {"temperature": float(params.get("temperature", 0.6)), "max_tokens": _token_cap(text)}
+        if params.get("seed") is not None:
+            kw["seed"] = int(params["seed"])
+        return kw
 
-        if abs(speed - 1.0) >= 0.02:
-            wav = self.adjust_speed(wav, speed)
-            stats["audio_s"] = len(wav) / SR
+    def synth_sentence(self, text, voice, style, params):
+        wav, stats = self.tts(text, speaker=voice, style=style, **self._kwargs(text, params))
+        return wav, {"tokens": stats.get("tokens", 0), "ttfa": stats.get("ttft"), "hit_cap": stats.get("hit_cap", False)}
 
-        return wav, stats
+    def stream_sentence(self, text, voice, style, params):
+        for chunk, _ in self.tts.stream(text, speaker=voice, style=style, **self._kwargs(text, params)):
+            if len(chunk):
+                yield chunk
 
-    def stream_audio(
-        self,
-        text: str,
-        voice: str = "Amit",
-        style: str = "NEUTRAL",
-        response_format: str = "mp3",
-        speed: float = 1.0,
-        save_file: bool = True,
-        file_id: Optional[str] = None
-    ) -> Generator[bytes, None, None]:
-        """Stream generated audio in real-time. Yields chunk bytes."""
-        resolved_voice = self.resolve_voice(voice)
-        format_lower = response_format.lower()
 
-        accumulated_chunks = []
+class IndicSpeakTorch(_IndicSpeakBase):
+    name = "indic-speak-torch"
+    engine = "pytorch"
 
-        if self.mlx_tts is not None and self.stream_long_fn is not None:
-            # Yield WAV header if WAV stream requested
-            if format_lower == "wav":
-                yield make_streaming_wav_header(sample_rate=SR, num_channels=1, bits_per_sample=16)
+    def load(self, local_dir, spec, token):
+        module = _import_from(local_dir, "inference")
+        self.device = _torch_device()
+        self.tts = module.TTS(local_dir, device=self.device)
 
-            for chunk, stats in self.stream_long_fn(
-                self.mlx_tts, text, speaker=resolved_voice, style=style, temperature=0.6
-            ):
-                if len(chunk) == 0:
-                    continue
-                if abs(speed - 1.0) >= 0.02:
-                    chunk = self.adjust_speed(chunk, speed)
+    def synth_sentence(self, text, voice, style, params):
+        kw = {"temperature": float(params.get("temperature", 0.6)), "max_new_tokens": _token_cap(text)}
+        if params.get("seed") is not None:
+            kw["seed"] = int(params["seed"])
+        wav = self.tts(text=text, speaker=voice, style=style, **kw)
+        return wav, {}
 
-                if save_file:
-                    accumulated_chunks.append(chunk)
 
-                # Format conversion
-                chunk_int16 = (np.clip(chunk, -1.0, 1.0) * 32767).astype(np.int16)
-                if format_lower in ("pcm", "wav"):
-                    yield chunk_int16.tobytes()
-                elif format_lower == "mp3":
-                    # Write short MP3 buffer
-                    buf = io.BytesIO()
-                    sf.write(buf, chunk, SR, format="MP3")
-                    yield buf.getvalue()
-                else:
-                    yield chunk_int16.tobytes()
+KOKORO_VOICES = {
+    "af_heart": ("Female", "en-us"), "af_bella": ("Female", "en-us"), "af_nicole": ("Female", "en-us"),
+    "af_sarah": ("Female", "en-us"), "af_sky": ("Female", "en-us"), "af_alloy": ("Female", "en-us"),
+    "af_nova": ("Female", "en-us"), "af_aoede": ("Female", "en-us"), "af_kore": ("Female", "en-us"),
+    "am_adam": ("Male", "en-us"), "am_michael": ("Male", "en-us"), "am_echo": ("Male", "en-us"),
+    "am_onyx": ("Male", "en-us"), "am_fenrir": ("Male", "en-us"), "am_puck": ("Male", "en-us"),
+    "bf_emma": ("Female", "en-gb"), "bf_isabella": ("Female", "en-gb"), "bf_alice": ("Female", "en-gb"),
+    "bm_george": ("Male", "en-gb"), "bm_lewis": ("Male", "en-gb"), "bm_fable": ("Male", "en-gb"),
+    "hf_alpha": ("Female", "hi"), "hf_beta": ("Female", "hi"), "hm_omega": ("Male", "hi"), "hm_psi": ("Male", "hi"),
+}
+_KOKORO_LANG_NAMES = {"en-us": "English (US)", "en-gb": "English (UK)", "hi": "Hindi"}
 
-        else:
-            # Fallback if streaming generator unavailable: synthesize utterance and stream in slices
-            wav, _ = self.synthesize(text, voice=resolved_voice, style=style, speed=speed)
-            if save_file:
-                accumulated_chunks.append(wav)
 
-            if format_lower == "wav":
-                yield make_streaming_wav_header(sample_rate=SR, num_channels=1, bits_per_sample=16)
+class KokoroTTS(TTSAdapter):
+    name = "kokoro"
+    engine = "kokoro"
+    default_voice = "af_heart"
+    native_speed = True
+    chunk_text = False
 
-            chunk_len = 2048 * 4
-            for i in range(0, len(wav), chunk_len):
-                piece = wav[i:i + chunk_len]
-                piece_int16 = (np.clip(piece, -1.0, 1.0) * 32767).astype(np.int16)
-                if format_lower in ("pcm", "wav"):
-                    yield piece_int16.tobytes()
-                elif format_lower == "mp3":
-                    buf = io.BytesIO()
-                    sf.write(buf, piece, SR, format="MP3")
-                    yield buf.getvalue()
-                else:
-                    yield piece_int16.tobytes()
+    @classmethod
+    def catalog(cls) -> dict:
+        voices = {v: {"gender": g, "lang": lang, "lang_name": _KOKORO_LANG_NAMES[lang], "desc": ""}
+                  for v, (g, lang) in KOKORO_VOICES.items()}
+        aliases = {"alloy": "af_alloy", "echo": "am_echo", "fable": "bm_fable",
+                   "onyx": "am_onyx", "nova": "af_nova", "shimmer": "af_bella"}
+        return {"voices": voices, "openai_aliases": aliases, "styles": [], "default_voice": "af_heart"}
 
-        # Save complete streamed audio to disk in background if requested
-        if save_file and accumulated_chunks:
-            try:
-                full_wav = np.concatenate(accumulated_chunks)
-                fid = file_id or f"tts_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-                self.save_audio(fid, full_wav, format=format_lower, metadata={
-                    "text": text,
-                    "voice": resolved_voice,
-                    "style": style,
-                    "speed": speed,
-                    "streamed": True
-                })
-            except Exception as e:
-                logger.error(f"Failed to save streamed audio: {e}")
+    def load(self, local_dir, spec, token):
+        try:
+            from kokoro import KModel, KPipeline
+        except ImportError:
+            raise ModelError("The 'kokoro' package is not installed. Run: pip install kokoro",
+                             status=501, code="backend_unavailable")
+        import os
+        self.repo_id = spec["repo_id"]
+        weights = next((f for f in sorted(os.listdir(local_dir)) if f.endswith(".pth")), None)
+        if weights is None:
+            raise ModelError(f"No .pth checkpoint found in {spec['repo_id']}.", status=500, code="model_load_failed")
+        self.device = _torch_device()
+        self.model = KModel(repo_id=self.repo_id, config=os.path.join(local_dir, "config.json"),
+                            model=os.path.join(local_dir, weights)).to(self.device).eval()
+        self._pipeline_cls = KPipeline
+        self.pipelines: Dict[str, object] = {}
 
-    def encode_audio(self, wav: np.ndarray, format: str = "mp3") -> bytes:
-        """Encode float32 waveform array to target audio bytes."""
-        fmt = format.lower()
-        if fmt == "pcm":
-            return (np.clip(wav, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    def resolve_voice(self, voice):
+        name = (voice or "").strip()
+        if re.fullmatch(r"[a-z]{2}_[a-z0-9]+", name):   # any voice file shipped in the repo
+            return name
+        return super().resolve_voice(voice)
 
-        buf = io.BytesIO()
-        sf_format = "WAV"
-        if fmt in ("mp3", "mpeg"):
-            sf_format = "MP3"
-        elif fmt == "flac":
-            sf_format = "FLAC"
-        elif fmt in ("ogg", "opus"):
-            sf_format = "OGG"
-        elif fmt == "wav":
-            sf_format = "WAV"
+    def _pipeline(self, voice: str):
+        code = voice[0]
+        if code not in self.pipelines:
+            self.pipelines[code] = self._pipeline_cls(lang_code=code, repo_id=self.repo_id, model=self.model)
+        return self.pipelines[code]
 
-        sf.write(buf, wav, SR, format=sf_format)
-        return buf.getvalue()
+    def stream_sentence(self, text, voice, style, params):
+        speed = float(params.get("speed", 1.0))
+        for result in self._pipeline(voice)(text, voice=voice, speed=speed, split_pattern=r"\n+"):
+            if result.audio is not None:
+                yield result.audio.detach().float().cpu().numpy()
 
-    def save_audio(self, file_id: str, wav: np.ndarray, format: str = "mp3", metadata: Optional[dict] = None) -> dict:
-        """Save synthesized audio and its metadata to the server filesystem."""
-        fmt = format.lower()
-        ext = "raw" if fmt == "pcm" else fmt
-        filename = f"{file_id}.{ext}"
-        filepath = self.generated_dir / filename
+    def synth_sentence(self, text, voice, style, params):
+        parts = list(self.stream_sentence(text, voice, style, params))
+        return (np.concatenate(parts) if parts else np.zeros(0, np.float32)), {}
 
-        audio_bytes = self.encode_audio(wav, format=fmt)
-        with open(filepath, "wb") as f:
-            f.write(audio_bytes)
 
-        duration = len(wav) / SR
-        meta = {
-            "id": file_id,
-            "filename": filename,
-            "path": str(filepath),
-            "format": fmt,
-            "duration": round(duration, 3),
-            "size_bytes": len(audio_bytes),
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            **(metadata or {})
-        }
+class TransformersTTS(TTSAdapter):
+    """Generic Hugging Face `text-to-speech` pipeline (VITS/MMS, Bark, SpeechT5-style models)."""
+    name = "transformers-tts"
+    engine = "transformers"
 
-        meta_path = self.generated_dir / f"{file_id}.json"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
+    def load(self, local_dir, spec, token):
+        from transformers import pipeline
+        self.device = _torch_device()
+        try:
+            self.pipe = pipeline("text-to-speech", model=local_dir, device=self.device)
+            self.pipe("ok")                       # some architectures lack MPS kernels; fail here, not mid-request
+        except Exception as e:
+            if self.device == "cpu":
+                raise
+            logger.warning("%s failed on %s (%s); falling back to CPU", spec["repo_id"], self.device, e)
+            self.device = "cpu"
+            self.pipe = pipeline("text-to-speech", model=local_dir, device="cpu")
+        self.sample_rate = int(getattr(self.pipe, "sampling_rate", None) or SR)
 
-        return meta
+    def synth_sentence(self, text, voice, style, params):
+        out = self.pipe(text)
+        self.sample_rate = int(out["sampling_rate"])
+        return np.asarray(out["audio"], dtype=np.float32).reshape(-1), {}
 
-    def list_saved_files(self) -> list[dict]:
-        """List all saved audio files."""
-        files = []
-        for meta_file in sorted(self.generated_dir.glob("*.json"), key=os.path.getmtime, reverse=True):
-            try:
-                with open(meta_file, "r", encoding="utf-8") as f:
-                    files.append(json.load(f))
-            except Exception:
-                continue
-        return files
+
+ADAPTERS = {cls.name: cls for cls in (IndicSpeakMLX, IndicSpeakTorch, KokoroTTS, TransformersTTS)}
+
+
+def create_adapter(spec: dict) -> TTSAdapter:
+    cls = ADAPTERS.get(spec.get("adapter") or "")
+    if cls is None:
+        raise ModelError(f"Unknown TTS adapter '{spec.get('adapter')}' for model '{spec['id']}'.",
+                         status=501, code="adapter_not_found")
+    return cls()
+
+
+def catalog_for(spec: dict) -> dict:
+    cls = ADAPTERS.get(spec.get("adapter") or "", TTSAdapter)
+    return cls.catalog()
+
+
+# ----------------------------------------------------------------------------
+# Synthesis (model-agnostic)
+# ----------------------------------------------------------------------------
+GAP_S = 0.25
+
+
+def _to_output_rate(adapter: TTSAdapter, wav: np.ndarray) -> np.ndarray:
+    wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+    return resample(wav, adapter.sample_rate, SR) if adapter.sample_rate != SR else wav
+
+
+def synthesize(adapter: TTSAdapter, text: str, voice: Optional[str] = None, style: Optional[str] = None,
+               speed: float = 1.0, params: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
+    """Full synthesis. Returns (float32 mono @ 24 kHz, stats)."""
+    params = dict(params or {})
+    voice_name = adapter.resolve_voice(voice)
+    style_tag = normalize_style(style)
+    params["speed"] = speed
+    sentences = split_text(text) if adapter.chunk_text else [text.strip()]
+    if not sentences or not sentences[0]:
+        raise ModelError("Input text is empty.", param="input")
+
+    t0 = time.time()
+    gap = np.zeros(int(GAP_S * SR), np.float32)
+    parts: List[np.ndarray] = []
+    tokens, ttfa, truncated = 0, None, 0
+    for sent in sentences:
+        wav, st = adapter.synth_sentence(sent, voice_name, style_tag, params)
+        if ttfa is None:
+            ttfa = time.time() - t0
+        tokens += int(st.get("tokens") or 0)
+        truncated += 1 if st.get("hit_cap") else 0
+        wav = _to_output_rate(adapter, wav)
+        if adapter.chunk_text:
+            wav = trim_silence(wav)
+        parts += [wav, gap]
+    wav = np.concatenate(parts[:-1]) if parts else np.zeros(0, np.float32)
+    if not adapter.native_speed:
+        wav = change_speed(wav, speed)
+    total = time.time() - t0
+    audio_s = len(wav) / SR
+    stats = {
+        "engine": adapter.engine, "voice": voice_name, "style": style_tag or "NEUTRAL",
+        "sentences": len(sentences), "total_s": round(total, 3), "audio_s": round(audio_s, 3),
+        "rtf": round(total / max(audio_s, 1e-4), 3), "ttfa_s": round(ttfa or total, 3),
+    }
+    if tokens:
+        stats["tokens"] = tokens
+        stats["tok_per_s"] = round(tokens / max(total, 1e-6), 1)
+    if truncated:
+        stats["truncated_sentences"] = truncated
+    return wav, stats
+
+
+def stream_synthesis(adapter: TTSAdapter, text: str, voice: Optional[str] = None, style: Optional[str] = None,
+                     speed: float = 1.0, params: Optional[dict] = None,
+                     cancel: Optional[threading.Event] = None) -> Iterator[np.ndarray]:
+    """Yield float32 mono @ 24 kHz chunks as they are generated.
+
+    At speed 1.0 chunks are emitted as the model produces them. Other speeds are
+    time-stretched one sentence at a time, so latency becomes sentence-granular.
+    """
+    params = dict(params or {})
+    voice_name = adapter.resolve_voice(voice)
+    style_tag = normalize_style(style)
+    params["speed"] = speed
+    sentences = split_text(text) if adapter.chunk_text else [text.strip()]
+    if not sentences or not sentences[0]:
+        raise ModelError("Input text is empty.", param="input")
+    stretch = (not adapter.native_speed) and abs(speed - 1.0) >= 0.02
+    gap = np.zeros(int(GAP_S * SR / (speed if stretch else 1.0)), np.float32)
+
+    for i, sent in enumerate(sentences):
+        pending: List[np.ndarray] = []
+        for chunk in adapter.stream_sentence(sent, voice_name, style_tag, params):
+            if cancel is not None and cancel.is_set():
+                return
+            chunk = _to_output_rate(adapter, chunk)
+            if stretch:
+                pending.append(chunk)
+            elif len(chunk):
+                yield chunk
+        if pending:
+            yield change_speed(np.concatenate(pending), speed)
+        if i < len(sentences) - 1:
+            yield gap

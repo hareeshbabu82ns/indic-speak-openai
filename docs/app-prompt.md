@@ -12,9 +12,74 @@ The platform includes pre-configured first-class support for `iniquitous/indic-s
 
 ---
 
+### 0. Delivery Phases & Cross-Cutting Design
+
+The platform ships in phases. Every phase adds one engine module, registers its adapter factory with the Model Manager and adds a playground tab; the manager, registry, lifecycle API and dashboard shell built in phase 1 do not change.
+
+| Phase | Scope | Engine module | Status |
+| --- | --- | --- | --- |
+| **1** | Text-to-Speech, Speech-to-Text, Model Manager, lifecycle API, dashboard (Models, TTS, ASR, Files, API Code tabs), `start.sh`, `test_api.py` | `tts_engine.py`, `asr_engine.py`, `model_manager.py`, `audio_utils.py`, `transliterate.py` | **Implemented** |
+| 2 | Chat / completions (LLM), vision-language (VLM), SSE streaming, reasoning blocks, tool calling | `llm_engine.py` | Planned |
+| 3 | Embeddings and cross-encoder reranking | `embedding_engine.py` | Planned |
+| 4 | Image generation | `image_engine.py` | Planned |
+| 5 | Hardening: API-key auth, request queue limits, Prometheus metrics, download cancel/resume | `server.py` | Planned |
+
+Models of a later-phase modality can already be registered, inspected and downloaded in phase 1; loading them returns `501 modality_not_supported`.
+
+#### 0.1 Engine adapter contract
+
+Each engine module exposes `create_adapter(spec) -> adapter` and `catalog_for(spec) -> dict` (static metadata such as voices or languages, available without loading weights). An adapter implements `load(local_dir, spec, hf_token)`, `unload()` and its modality's inference methods. The registry entry's `adapter` field selects the class; it is auto-detected from the repository (`guess_adapter`) and can be overridden at registration.
+
+| Modality | Adapter | Serves |
+| --- | --- | --- |
+| tts | `indic-speak-mlx` | `iniquitous/indic-speak-mlx-bf16` (MLX LM + SNAC/Vocos, chunk-level streaming) |
+| tts | `indic-speak-torch` | `bodhan-ai/indic-speak` (PyTorch MPS / CUDA / CPU) |
+| tts | `kokoro` | `hexgrad/Kokoro-82M` via the `kokoro` package |
+| tts | `transformers-tts` | Any Hugging Face `text-to-speech` pipeline (MMS / VITS, Bark, ...) |
+| asr | `indic-transcribe` | `bodhan-ai/indic-transcribe-core` |
+| asr | `whisper-mlx` | `mlx-community/whisper-*` via `mlx-whisper` |
+| asr | `transformers-asr` | Any Hugging Face ASR pipeline (Whisper on PyTorch, wav2vec2, ...) |
+
+#### 0.2 Concurrency model
+
+All loads, unloads and inference run on **one dedicated worker thread** owned by the Model Manager. MLX and MPS are not safe to drive from several threads, and one GPU gains nothing from parallel jobs. The asyncio loop stays free for status polling, downloads, file serving and audio decoding. Streaming synthesis runs on the worker and hands chunks to the response through an `asyncio.Queue`; a client disconnect sets a cancel flag that stops generation.
+
+#### 0.3 Model resolution, defaults and OpenAI aliases
+
+A request's `model` is resolved in this order: registry `id`, per-model `aliases`, global alias table, `repo_id`. The global alias table maps OpenAI names to the **current default model of a modality** (`tts-1`, `tts-1-hd`, `gpt-4o-mini-tts` -> default TTS; `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` -> default ASR). "Set as Default" in the dashboard (`POST /v1/models/{id}/default`) therefore retargets every unmodified OpenAI client. An omitted `model` also uses the default. Initial defaults: `indic-speak-mlx` on Apple Silicon (`indic-speak-torch` elsewhere) and `indic-transcribe`.
+
+#### 0.4 Lifecycle state machine
+
+`registered` -> `downloading` -> `cached` -> `loaded` -> (`unload` or eviction) -> `cached`. A model is `cached` only when every repository it needs (`repo_id` plus `extra_repos`, e.g. the SNAC codec) is on disk with no partial blobs. With `auto_download` on (default), the first inference or load request for a `registered` model starts or joins a download task and waits for it.
+
+Before a load, the manager evicts least-recently-used models until both limits hold: at most `max_loaded_models` resident (default 3) and at least `min_free_memory_gb` free after the incoming model's estimated footprint (default 4 GB). `idle_unload_minutes` (default 0 = off) unloads models that have not served a request recently. Unloading drops the adapter, runs `gc.collect()`, `mx.clear_cache()` and `torch.mps.empty_cache()`.
+
+#### 0.5 Errors, limits and security
+
+- Every error uses the OpenAI envelope `{"error": {"message", "type", "param", "code"}}`; validation errors are `400`, unknown models `404 model_not_found`, wrong modality `400 model_modality_mismatch`, registry conflicts `409`, oversized uploads `413`.
+- Limits: `MAX_INPUT_CHARS` (default 20000) for TTS input, `MAX_UPLOAD_MB` (default 500) for audio uploads.
+- File ids are validated against `^[A-Za-z0-9_-]{1,80}$` and matched by exact stem, so they cannot escape the data directories.
+- `HF_TOKEN` is read from the environment / `.env`; a token entered in the dashboard is held in memory only and never written to disk or returned by the API.
+- There is no authentication before phase 5. Bind to `127.0.0.1` (`./start.sh --host 127.0.0.1`) on untrusted networks, since the lifecycle endpoints can download and delete model weights.
+
+#### 0.6 Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HOST`, `PORT` | `0.0.0.0`, `8000` | Bind address |
+| `HF_TOKEN` | unset | Gated / private repositories |
+| `PRELOAD_MODELS` | unset | Comma-separated model ids to load at startup; `defaults` = default TTS + ASR |
+| `MODELS_CONFIG` | `config/models.json` | Registry file |
+| `DATA_DIR` | `data` | Generated audio, uploads, transcripts |
+| `HF_HUB_CACHE` | `~/.cache/huggingface/hub` | Weights cache (shared with other Hugging Face tools) |
+| `MAX_INPUT_CHARS`, `MAX_UPLOAD_MB` | `20000`, `500` | Request limits |
+| `LOG_LEVEL` | `INFO` | Logging |
+
+---
+
 ### 1. Core Architecture & Dynamic Multi-Model Engines
 
-The server architecture is modular, decoupled, and orchestrated by a central **Model Manager** (`model_manager.py`). Models are loaded into Apple Silicon unified memory on demand or preloaded at startup, with dynamic memory management that frees VRAM/RAM (`mx.metal.clear_cache()` and `torch.mps.empty_cache()`) when swapping or unloading models.
+The server architecture is modular, decoupled, and orchestrated by a central **Model Manager** (`model_manager.py`). Models are loaded into Apple Silicon unified memory on demand (the default) or preloaded at startup (`--preload`), with dynamic memory management that frees VRAM/RAM (`mx.clear_cache()` and `torch.mps.empty_cache()`) when swapping or unloading models.
 
 #### 1.1 Model Registry & Lifecycle Manager (`model_manager.py` & `config/models.json`)
 
@@ -27,10 +92,16 @@ The server architecture is modular, decoupled, and orchestrated by a central **M
   - `context_length`: Maximum sequence length (tokens).
   - `chat_template`: Jinja2 template or tokenizer default.
   - `default_params`: Modality-specific defaults (e.g. temperature, max_tokens, speed, voice, language, steps).
-  - `status`: `registered` (configured), `downloading`, `cached` (downloaded to disk), `loaded` (active in memory), or `unloaded`.
+  - `status`: `registered` (configured), `downloading`, `cached` (downloaded to disk, not in memory) or `loaded` (active in memory). Derived at request time, never stored.
+  - `adapter`: Engine adapter that serves the model (section 0.1); auto-detected, overridable.
+  - `aliases`: Extra names accepted in the `model` field.
+  - `extra_repos`: Additional repositories the model needs (e.g. `hubertsiuzdak/snac_24khz`), downloaded and sized with it.
+  - `ignore_patterns`: Files to skip when downloading (e.g. `nemo/*` halves the Indic-Transcribe download).
+  - `description`, `remote_size_bytes`, `created`.
+- **Registry file layout** (`config/models.json`, written atomically): `{"version", "defaults": {"tts", "asr"}, "aliases": {"tts-1": "@tts", ...}, "settings": {"max_loaded_models", "min_free_memory_gb", "idle_unload_minutes", "auto_download"}, "models": [...]}`. A corrupt file is moved aside and the defaults are re-seeded.
 - **Hugging Face Hub Integration**:
   - Query HF Hub metadata (`pipeline_tag`, `model_type`, `architectures`, file tree, and size) via `huggingface_hub` to auto-detect modality, default backend, and required dependencies.
-  - Background asynchronous downloads with real-time percentage progress using `huggingface_hub.snapshot_download` or `mlx_lm` download routines.
+  - Background downloads with real-time progress (percent, bytes, speed, ETA) using `huggingface_hub.snapshot_download`; bytes are counted through the hub's own progress hooks, which stay accurate with the Xet transfer backend.
   - Support for private/gated repositories using `HF_TOKEN` from environment or UI settings.
   - Local cache management: Inspect disk size (`~/.cache/huggingface/hub` or `data/cache`) and purge uninstalled models.
 - **Apple Silicon Memory Management**:
@@ -40,8 +111,9 @@ The server architecture is modular, decoupled, and orchestrated by a central **M
 - **Pre-Configured Out-of-the-Box Models**:
   - **Chat/LLM**: `mlx-community/Qwen2.5-7B-Instruct-4bit` (alias `qwen2.5-7b`), `mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit` (alias `deepseek-r1-7b`), `mlx-community/Llama-3.2-3B-Instruct-4bit` (alias `llama-3.2-3b`).
   - **Vision-Language (VLM)**: `mlx-community/Qwen2-VL-7B-Instruct-4bit` (alias `qwen2-vl-7b`).
-  - **TTS**: `iniquitous/indic-speak-mlx-bf16` (alias `indic-speak-mlx`), `bodhan-ai/indic-speak` (alias `indic-speak-torch`, `tts-1`), `hexgrad/Kokoro-82M` (alias `kokoro-82m`).
-  - **ASR**: `mlx-community/whisper-large-v3-mlx` (alias `whisper-1`), `bodhan-ai/indic-transcribe-core` (alias `indic-transcribe`).
+  - **TTS**: `iniquitous/indic-speak-mlx-bf16` (id `indic-speak-mlx`, default), `bodhan-ai/indic-speak` (id `indic-speak-torch`), `hexgrad/Kokoro-82M` (id `kokoro-82m`). `tts-1` / `tts-1-hd` follow the default TTS model.
+  - **ASR**: `bodhan-ai/indic-transcribe-core` (id `indic-transcribe`, default), `mlx-community/whisper-large-v3-mlx` (id `whisper-large-v3`). `whisper-1` follows the default ASR model.
+  - **Recommended one-click extras**: `openai/whisper-large-v3-turbo` (PyTorch), `mlx-community/whisper-tiny`, `facebook/mms-tts-hin`.
   - **Embeddings**: `BAAI/bge-small-en-v1.5` (alias `text-embedding-3-small`, `bge-small`).
   - **Reranker**: `BAAI/bge-reranker-base` (alias `bge-reranker`).
   - **Image Generation**: `black-forest-labs/FLUX.1-schnell` via `mflux` or `stabilityai/stable-diffusion-xl-base-1.0` via `diffusers` (MPS).
@@ -74,14 +146,17 @@ The server architecture is modular, decoupled, and orchestrated by a central **M
 - **Catalog & Voices**:
   - First-party catalog of 44 voices across 22 Indic languages and English.
   - OpenAI voice alias mapping: `alloy` -> `Amit`, `echo` -> `Arun`, `fable` -> `Deepika`, `onyx` -> `Vamsi`, `nova` -> `Kavya`, `shimmer` -> `Sravani`.
-  - Delivery style tags: `NEUTRAL`, `HAPPY`, `SAD`, `ANGER`, `FEAR`, `SURPRISE`, `news`, `AIR style news`, `TV style news`, `advertisements`, `educational lecture`, etc.
+  - Delivery style tags: `NEUTRAL`, `HAPPY`, `SAD`, `ANGER`, `FEAR`, `SURPRISE`, `DISGUST`, `news`, `AIR style news`, `TV style news`, `advertisements`, `children's stories`, `educational lecture`, `Customer Care`, `single person narration audiobook`. Names are matched case-insensitively and mapped to the tag spelling the checkpoint was trained on (`voices.md`): `NEUTRAL` sends no style block, emotions are lower-cased.
+  - Unknown voices fall back to the model's default voice; the voice actually used is returned in `X-Voice`.
 - **Synthesis & Streaming**:
-  - Sentence-chunked synthesis (`speak_long`) to prevent truncation on multi-sentence text.
-  - Speed adjustment (0.25x to 4.0x) via high-quality audio resampling.
+  - Sentence-chunked synthesis (`speak_long` behaviour: per-sentence generation with a duration-based token cap, silence trimming, 0.25 s gaps) to prevent truncation on multi-sentence text. Sentences over ~220 characters are split again at clause punctuation, then at spaces, since one generation is capped near 25 s of audio.
+  - Speed adjustment (0.25x to 4.0x) by pitch-preserving time-stretch (ffmpeg `atempo`), falling back to resampling when ffmpeg is absent. Models with native speed control (Kokoro) use it directly.
+  - Optional `temperature` and `seed` request fields for reproducible sampling.
   - Formats: `mp3`, `wav` (24 kHz mono), `flac`, and `pcm` (raw 16-bit signed integer LE).
   - Delivery modes:
     - Non-streaming: Full synthesis saved to `data/generated/{file_id}.{format}` with response headers `X-File-Id`, `X-File-Url`, and metadata JSON.
-    - Streaming (`stream=true`): Chunked transfer encoding with indefinite 44-byte WAV header (`0xFFFFFFFF`), background accumulation and persistence for subsequent download.
+    - Streaming (`stream=true`): Chunked transfer encoding for `wav` (indefinite 44-byte header, `0xFFFFFFFF`), `pcm` and `mp3` (one continuous ffmpeg encoder, so chunk seams carry no encoder padding); other formats return `400`. Audio is accumulated and persisted under the `X-File-Id` announced in the response headers. At speeds other than 1.0 the stream is time-stretched per sentence.
+    - All output is 24 kHz mono; adapters with another native rate are resampled.
 
 ---
 
@@ -89,14 +164,16 @@ The server architecture is modular, decoupled, and orchestrated by a central **M
 
 - **Backends**:
   - `mlx-whisper` / Hugging Face Whisper: Ultra-fast Apple Silicon transcription for `openai/whisper-*` and community MLX checkpoints.
-  - `bodhan-ai/indic-transcribe-core`: Indic Canary architecture on MPS/CUDA/CPU for 27 Indic languages + English.
+  - `bodhan-ai/indic-transcribe-core`: Indic Canary architecture on MPS/CUDA/CPU for 26 Indic languages + English (27 trained languages; the catalog adds `auto`).
+  - Generic Hugging Face ASR pipelines (`transformers-asr`), with Whisper language identification and translation.
 - **Capabilities**:
   - Ingestion: WAV, MP3, M4A, OGG, WEBM, FLAC via SoundFile with FFmpeg piping fallback, resampled to 16 kHz mono float32.
   - Automatic language detection (`language=None` or `"auto"`) and ISO-639-1 language routing.
-  - Long-form audio processing: Automatic pause/silence segmentation (`split_on_silence`) for audio > 30s to prevent repetition collapse or hallucinations.
+  - Long-form audio processing: Automatic pause/silence segmentation (`split_on_silence`) for audio > 30s to prevent repetition collapse or hallucinations; each piece is decoded with the repository's repetition guard. The optional `chunk_seconds` form field (5-30, default 30) lowers the maximum segment length for finer subtitle timestamps at a small accuracy cost. Language is identified once per file, not per segment.
   - Output formats: `json` (`{"text": "..."}`), `text` (plain string), `verbose_json` (timestamps and segment breakdown `[{"id": 0, "start": 0.0, "end": 2.5, "text": "..."}]`), `srt` (SubRip subtitles), and `vtt` (WebVTT).
-  - Script modes (Indic models): `native` (default), `mixed`/`itn` (Latin loanwords & digits), and `romanised` (transliteration).
-  - Persistence: Raw uploads stored in `data/uploads/` and transcript metadata saved to `data/transcriptions/{file_id}.json`.
+  - Script modes (Indic models): `native` (default), `mixed`/`itn` and `romanised`. The published `indic-transcribe-core` checkpoint emits native script only, so `romanised` is completed after decoding by rule-based ISO 15919 transliteration (`transliterate.py`; Brahmic scripts, Perso-Arabic text passes through unchanged) and `mixed` currently returns native script. The mode actually delivered is reported in the `X-Script-Mode` response header.
+  - Translation (`/v1/audio/translations`): Whisper models translate to English; Indic-Transcribe returns the romanised transcript.
+  - Persistence: Raw uploads stored as `data/uploads/{file_id}.{ext}` and transcript records in `data/transcriptions/{file_id}.json`, sharing one id so history can replay the audio next to its transcript.
 
 ---
 
@@ -144,10 +221,11 @@ Implement a FastAPI application with lifespan model preloading, CORS middleware,
   - Returns image data URLs or base64 JSON payload.
 - `POST /v1/audio/speech`:
   - Request body (JSON): `model`, `input`, `voice`, `response_format` (`mp3`/`wav`/`flac`/`pcm`), `speed` (0.25 to 4.0), `style` (default `NEUTRAL`), `stream` (bool), `save` (bool).
-  - Returns binary audio stream with `Content-Type`, `X-File-Id`, `X-File-Url`, and `Content-Disposition`.
+  - Optional: `temperature`, `seed`. Omitting `model` uses the default TTS model.
+  - Returns binary audio stream with `Content-Type`, `X-File-Id`, `X-File-Url`, and `Content-Disposition`, plus `X-Model`, `X-Voice`, `X-Audio-Duration`, `X-Generation-Time` and `X-RTF`.
 - `POST /v1/audio/transcriptions`:
-  - Multipart form: `file` (UploadFile), `model`, `language`, `response_format` (`json`, `text`, `verbose_json`, `srt`, `vtt`), `mode` (`native`, `mixed`, `romanised`), `temperature`, `save`.
-  - Returns transcript in the requested format.
+  - Multipart form: `file` (UploadFile), `model`, `language`, `prompt`, `response_format` (`json`, `text`, `verbose_json`, `srt`, `vtt`), `mode` (`native`, `mixed`, `romanised`), `temperature`, `save`, `chunk_seconds`.
+  - Returns transcript in the requested format, with `X-Model`, `X-Language`, `X-Script-Mode`, `X-Generation-Time` and (when saved) `X-File-Id` / `X-File-Url`.
 - `POST /v1/audio/translations`:
   - Multipart form upload, transcribes and outputs translated/romanised text.
 - `GET /v1/models`: Standard OpenAI format listing all registered models with extended fields: `modality`, `backend`, `repo_id`, `status` (`loaded`/`cached`/`unloaded`), and `size_mb`.
@@ -173,14 +251,18 @@ Implement a FastAPI application with lifespan model preloading, CORS middleware,
   - Query param `repo_id`. Queries Hugging Face API to retrieve model card tags, pipeline type, estimated size, and auto-suggests optimal modality, backend, and quantization.
 - `GET /v1/system/status`:
   - Reports Apple Silicon unified memory (Total, Used, Free), MLX cache, MPS allocation, loaded models, disk cache usage, and device capability.
+- `GET /v1/models/recommended`: Tested model packs for one-click registration, flagged when already registered.
+- `GET /v1/models/tasks`: All download / load tasks, newest first.
+- `POST /v1/models/{model_id}/default`: Make the model the default for its modality (retargets `tts-1` / `whisper-1`).
+- `GET` / `POST /v1/system/settings`: `max_loaded_models`, `min_free_memory_gb`, `idle_unload_minutes`, `auto_download`, and a write-only `hf_token`.
 
 #### Auxiliary & File Endpoints
 
 - `GET /v1/audio/voices`: Catalog of voices grouped by model, language, gender, and OpenAI aliases.
 - `GET /v1/audio/languages`: Supported ASR languages and script modes.
 - `GET /v1/audio/files`: List saved TTS audio and ASR transcripts.
-- `GET /v1/audio/files/{file_id}`: Stream saved file.
-- `GET /v1/audio/files/{file_id}/download`: Download saved file with attachment disposition.
+- `GET /v1/audio/files/{file_id}`: Stream saved TTS audio, or return a transcript record (`?audio=true` returns the transcript's uploaded audio).
+- `GET /v1/audio/files/{file_id}/download`: Download saved file with attachment disposition (`?format=json|txt|srt|vtt` for transcripts).
 - `DELETE /v1/audio/files/{file_id}`: Delete file and its metadata.
 - `GET /` and `GET /ui`: Serve the management dashboard and testing web interface (`static/index.html`).
 - `GET /health`: Health status endpoint.
@@ -190,6 +272,8 @@ Implement a FastAPI application with lifespan model preloading, CORS middleware,
 ### 3. Web Management Dashboard & Multi-Modality Playground (`static/index.html`)
 
 Create a self-contained, responsive, dark-themed single-page web UI (no mandatory external CDN dependencies) accessible at `http://localhost:8000/`:
+
+**Phasing:** phase 1 ships Tab 1 (Model Manager), Tab 3 (TTS), Tab 4 (ASR), Tab 7 (Saved Files) and Tab 8 (API Code). Tab 2 arrives with phase 2, Tab 5 with phase 3 and Tab 6 with phase 4. Phase 1 additions: a memory and download settings panel on Tab 1, live streamed playback through Web Audio on Tab 3 (with time-to-first-audio), and a task selector (transcribe / translate) and segment-length selector on Tab 4.
 
 #### Tab 1: Model Manager & Hugging Face Hub Explorer (Central Management)
 
@@ -274,7 +358,7 @@ Write a POSIX-compliant, executable `start.sh` script that:
 
 1. Detects Python environment; creates a `.venv` virtual environment using `python3.12` or `python3` if not already present.
 2. Activates `.venv`.
-3. Checks and installs/upgrades dependencies from `requirements.txt`:
+3. Checks and installs/upgrades dependencies from `requirements.txt` (re-installed only when the file changes; `--upgrade` forces a refresh, `--skip-install` skips the check). Phase 1 installs the Core API, PyTorch & Hugging Face, Audio and MLX (`mlx`, `mlx-lm`, `mlx-whisper`) groups plus `psutil`, `kokoro` and `indic-transliteration`; `mlx-vlm`, `sentence-transformers`, `diffusers` and `mflux` are added with their phases:
    - Core API: `fastapi>=0.110.0`, `uvicorn[standard]>=0.28.0`, `pydantic>=2.0.0`, `python-multipart>=0.0.9`, `requests>=2.31.0`, `python-dotenv`.
    - Apple Silicon & MLX: `mlx`, `mlx-lm`, `mlx-vlm`, `mlx-whisper`, `mflux` (on macOS Apple Silicon).
    - PyTorch & Hugging Face: `torch`, `torchaudio`, `transformers>=4.40.0`, `accelerate`, `sentencepiece`, `huggingface_hub`, `sentence-transformers`, `diffusers`.
@@ -296,6 +380,8 @@ Write a POSIX-compliant, executable `start.sh` script that:
 ### 5. Automated Verification Suite (`test_api.py`)
 
 Write a comprehensive Python test script using `requests` and `soundfile` that verifies:
+
+**Phasing:** phase 1 covers groups 1, 2, 4, 5 and 8 (groups 3, 6 and 7 arrive with phases 2-4). The lifecycle group registers a 75 MB Whisper checkpoint, downloads, loads, transcribes, unloads and de-registers it. The suite also checks error envelopes, speed, every audio format, long-form segmentation, romanised translation output and file-id validation, and deletes every file and model it creates.
 
 1. **System & Health Checks**:
    - `GET /health` and `GET /v1/system/status` return 200 with system memory and device readiness.

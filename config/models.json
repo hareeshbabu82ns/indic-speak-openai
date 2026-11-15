@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "defaults": {
+    "tts": "indic-speak-mlx",
+    "asr": "indic-transcribe"
+  },
+  "aliases": {
+    "tts-1": "@tts",
+    "tts-1-hd": "@tts",
+    "gpt-4o-mini-tts": "@tts",
+    "whisper-1": "@asr",
+    "gpt-4o-transcribe": "@asr",
+    "gpt-4o-mini-transcribe": "@asr"
+  },
+  "settings": {
+    "max_loaded_models": 3,
+    "min_free_memory_gb": 4.0,
+    "idle_unload_minutes": 0,
+    "auto_download": true
+  },
+  "models": [
+    {
+      "id": "indic-speak-mlx",
+      "repo_id": "iniquitous/indic-speak-mlx-bf16",
+      "modality": "tts",
+      "backend": "mlx",
+      "quantization": "bf16",
+      "adapter": "indic-speak-mlx",
+      "extra_repos": [
+        "hubertsiuzdak/snac_24khz"
+      ],
+      "description": "Indic-Speak on MLX (Apple Silicon GPU). 44 voices, 22 Indic languages + English, real-time streaming.",
+      "default_params": {
+        "voice": "Amit",
+        "style": "NEUTRAL",
+        "temperature": 0.6,
+        "speed": 1.0
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794666242
+    },
+    {
+      "id": "indic-speak-torch",
+      "repo_id": "bodhan-ai/indic-speak",
+      "modality": "tts",
+      "backend": "transformers",
+      "quantization": "bf16",
+      "adapter": "indic-speak-torch",
+      "extra_repos": [
+        "hubertsiuzdak/snac_24khz"
+      ],
+      "ignore_patterns": [
+        "*.png"
+      ],
+      "description": "Indic-Speak reference checkpoint on PyTorch (MPS / CUDA / CPU).",
+      "default_params": {
+        "voice": "Amit",
+        "style": "NEUTRAL",
+        "temperature": 0.6,
+        "speed": 1.0
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794666242
+    },
+    {
+      "id": "kokoro-82m",
+      "repo_id": "hexgrad/Kokoro-82M",
+      "modality": "tts",
+      "backend": "transformers",
+      "quantization": "fp32",
+      "adapter": "kokoro",
+      "description": "Kokoro 82M: small, fast English/Hindi TTS (needs `pip install kokoro`).",
+      "default_params": {
+        "voice": "af_heart",
+        "speed": 1.0
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794666242,
+      "remote_size_bytes": 363323757
+    },
+    {
+      "id": "indic-transcribe",
+      "repo_id": "bodhan-ai/indic-transcribe-core",
+      "modality": "asr",
+      "backend": "transformers",
+      "quantization": "fp32",
+      "adapter": "indic-transcribe",
+      "ignore_patterns": [
+        "nemo/*",
+        "*.png"
+      ],
+      "description": "Indic Canary ASR: 26 Indic languages + English with language ID. Native script; romanised via transliteration.",
+      "default_params": {
+        "language": "auto",
+        "mode": "native"
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794666242
+    },
+    {
+      "id": "whisper-large-v3",
+      "repo_id": "mlx-community/whisper-large-v3-mlx",
+      "modality": "asr",
+      "backend": "mlx",
+      "quantization": "fp16",
+      "adapter": "whisper-mlx",
+      "description": "OpenAI Whisper large-v3 on MLX: 99 languages, translation to English.",
+      "default_params": {
+        "language": "auto"
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794666242
+    }
+  ]
+}

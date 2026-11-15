@@ -1,1181 +1,810 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Indic-Speak & Transcribe | OpenAI-Compatible Speech API</title>
-  <style>
-    :root {
-      --bg: #0f172a;
-      --card-bg: #1e293b;
-      --card-border: #334155;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --primary: #6366f1;
-      --primary-hover: #4f46e5;
-      --success: #10b981;
-      --danger: #ef4444;
-      --warning: #f59e0b;
-      --badge-bg: #312e81;
-      --badge-text: #c7d2fe;
-      --code-bg: #0b0f19;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.5;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    header {
-      background: rgba(30, 41, 59, 0.8);
-      backdrop-filter: blur(8px);
-      border-bottom: 1px solid var(--card-border);
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      padding: 1rem 2rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .logo-group {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-    .logo-icon {
-      font-size: 1.75rem;
-      background: linear-gradient(135deg, #6366f1, #a855f7);
-      width: 44px;
-      height: 44px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 10px;
-    }
-    .logo-text h1 {
-      font-size: 1.25rem;
-      font-weight: 700;
-      letter-spacing: -0.025em;
-    }
-    .logo-text p {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-    .header-links {
-      display: flex;
-      gap: 1rem;
-      align-items: center;
-    }
-    .nav-btn {
-      background: transparent;
-      border: 1px solid var(--card-border);
-      color: var(--text);
-      padding: 0.4rem 0.8rem;
-      border-radius: 6px;
-      font-size: 0.85rem;
-      cursor: pointer;
-      text-decoration: none;
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      transition: all 0.2s;
-    }
-    .nav-btn:hover {
-      background: var(--card-border);
-    }
-    .status-pill {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      font-size: 0.75rem;
-      padding: 0.25rem 0.6rem;
-      border-radius: 9999px;
-      background: rgba(16, 185, 129, 0.15);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #10b981;
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
-
-    main {
-      flex: 1;
-      max-width: 1200px;
-      width: 100%;
-      margin: 1.5rem auto;
-      padding: 0 1rem;
-    }
-
-    .tabs {
-      display: flex;
-      gap: 0.5rem;
-      border-bottom: 1px solid var(--card-border);
-      margin-bottom: 1.5rem;
-    }
-    .tab-btn {
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--text-muted);
-      padding: 0.75rem 1.25rem;
-      font-size: 0.95rem;
-      font-weight: 500;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      transition: all 0.2s;
-    }
-    .tab-btn.active {
-      color: #818cf8;
-      border-bottom-color: #818cf8;
-      font-weight: 600;
-    }
-    .tab-btn:hover:not(.active) {
-      color: var(--text);
-    }
-
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
-
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1.5rem;
-    }
-    @media (max-width: 868px) {
-      .grid-2 { grid-template-columns: 1fr; }
-    }
-
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 1.5rem;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    .card-title {
-      font-size: 1.1rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .card-subtitle {
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      margin-top: -0.75rem;
-      margin-bottom: 1rem;
-    }
-
-    .form-group {
-      margin-bottom: 1.25rem;
-    }
-    label {
-      display: block;
-      font-size: 0.85rem;
-      font-weight: 500;
-      margin-bottom: 0.4rem;
-      color: #cbd5e1;
-    }
-    textarea, select, input[type="text"], input[type="number"] {
-      width: 100%;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 0.65rem 0.85rem;
-      color: var(--text);
-      font-size: 0.9rem;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-    textarea:focus, select:focus, input:focus {
-      border-color: var(--primary);
-    }
-    textarea {
-      resize: vertical;
-      min-height: 110px;
-    }
-
-    .preset-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-      margin-top: 0.5rem;
-    }
-    .chip {
-      background: rgba(99, 102, 241, 0.15);
-      border: 1px solid rgba(99, 102, 241, 0.3);
-      color: #c7d2fe;
-      border-radius: 9999px;
-      padding: 0.2rem 0.6rem;
-      font-size: 0.75rem;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .chip:hover {
-      background: var(--primary);
-      color: white;
-    }
-
-    .row-controls {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.5rem;
-      padding: 0.7rem 1.25rem;
-      font-size: 0.95rem;
-      font-weight: 600;
-      border-radius: 8px;
-      border: none;
-      cursor: pointer;
-      transition: all 0.2s;
-      width: 100%;
-    }
-    .btn-primary {
-      background: var(--primary);
-      color: white;
-    }
-    .btn-primary:hover {
-      background: var(--primary-hover);
-    }
-    .btn-secondary {
-      background: #334155;
-      color: white;
-    }
-    .btn-secondary:hover {
-      background: #475569;
-    }
-    .btn-danger {
-      background: var(--danger);
-      color: white;
-    }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .btn-group {
-      display: flex;
-      gap: 0.75rem;
-    }
-
-    /* Audio visualizer and player */
-    .player-card {
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 1.25rem;
-      margin-top: 1.25rem;
-    }
-    audio {
-      width: 100%;
-      height: 42px;
-      border-radius: 6px;
-      outline: none;
-      margin-top: 0.5rem;
-    }
-
-    .stats-bar {
-      display: flex;
-      gap: 1.5rem;
-      margin-top: 0.75rem;
-      padding-top: 0.75rem;
-      border-top: 1px solid #1e293b;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-    .stats-item span {
-      color: var(--text);
-      font-weight: 600;
-    }
-
-    /* Record box */
-    .record-box {
-      border: 2px dashed var(--card-border);
-      border-radius: 12px;
-      padding: 2rem;
-      text-align: center;
-      background: rgba(15, 23, 42, 0.4);
-      margin-bottom: 1.25rem;
-      transition: border-color 0.2s;
-    }
-    .record-box.recording {
-      border-color: var(--danger);
-      background: rgba(239, 68, 68, 0.05);
-    }
-    .rec-btn {
-      width: 68px;
-      height: 68px;
-      border-radius: 50%;
-      background: #ef4444;
-      border: 4px solid rgba(239, 68, 68, 0.3);
-      color: white;
-      font-size: 1.5rem;
-      cursor: pointer;
-      margin: 0 auto 0.75rem auto;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-    }
-    .rec-btn.recording {
-      animation: record-pulse 1.2s infinite;
-      border-radius: 12px;
-      width: 54px;
-      height: 54px;
-    }
-    @keyframes record-pulse {
-      0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-      70% { transform: scale(1.05); box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
-      100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-    }
-
-    .upload-zone {
-      border: 2px dashed var(--card-border);
-      border-radius: 8px;
-      padding: 1.5rem;
-      text-align: center;
-      cursor: pointer;
-      margin-bottom: 1rem;
-      transition: border-color 0.2s;
-    }
-    .upload-zone:hover {
-      border-color: var(--primary);
-    }
-
-    .transcript-output {
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 1rem;
-      min-height: 120px;
-      max-height: 300px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      font-family: inherit;
-      font-size: 0.95rem;
-      line-height: 1.6;
-    }
-
-    .segment-item {
-      padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid #1e293b;
-      display: flex;
-      gap: 0.75rem;
-      align-items: baseline;
-      font-size: 0.88rem;
-    }
-    .segment-time {
-      color: #818cf8;
-      font-family: monospace;
-      font-size: 0.78rem;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-
-    pre code {
-      display: block;
-      background: var(--code-bg);
-      border: 1px solid var(--card-border);
-      padding: 1rem;
-      border-radius: 8px;
-      overflow-x: auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.85rem;
-      color: #a5f3fc;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.88rem;
-    }
-    th, td {
-      padding: 0.75rem;
-      text-align: left;
-      border-bottom: 1px solid var(--card-border);
-    }
-    th {
-      color: var(--text-muted);
-      font-weight: 500;
-      background: #1e293b;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .badge-primary { background: var(--badge-bg); color: var(--badge-text); }
-    .badge-green { background: rgba(16, 185, 129, 0.2); color: #34d399; }
-    .badge-yellow { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
-
-    .toast {
-      position: fixed;
-      bottom: 2rem;
-      right: 2rem;
-      background: #1e293b;
-      border: 1px solid var(--card-border);
-      color: var(--text);
-      padding: 0.75rem 1.25rem;
-      border-radius: 8px;
-      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-      display: none;
-      z-index: 100;
-      animation: fadeIn 0.3s;
-    }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Serving Platform | Speech</title>
+<style>
+:root {
+  --bg: #0b1120; --panel: #131c2e; --panel-2: #1a2540; --border: #263352; --border-2: #34446b;
+  --text: #e8edf7; --muted: #8b9ab8; --faint: #5d6c8c;
+  --primary: #6d7cff; --primary-2: #5563f0; --accent: #a78bfa;
+  --green: #34d399; --blue: #60a5fa; --yellow: #fbbf24; --red: #f87171; --gray: #94a3b8;
+  --code: #070b16; --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; font-size: 14px; }
+a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; } a.btn:hover { text-decoration: none; }
+header { position: sticky; top: 0; z-index: 40; background: rgba(11,17,32,.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+.bar { max-width: 1280px; margin: 0 auto; padding: .7rem 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.logo { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, var(--primary), var(--accent)); display: grid; place-items: center; font-weight: 800; font-size: .95rem; color: #fff; flex: none; }
+.brand h1 { font-size: 1rem; font-weight: 650; letter-spacing: -.01em; }
+.brand p { font-size: .72rem; color: var(--muted); }
+.spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .65rem; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); font-size: .74rem; color: var(--muted); white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gray); } .dot.ok { background: var(--green); } .dot.bad { background: var(--red); }
+nav { max-width: 1280px; margin: 0 auto; padding: 0 1.25rem; display: flex; gap: .25rem; overflow-x: auto; }
+nav button { background: none; border: 0; color: var(--muted); padding: .6rem .9rem; font-size: .86rem; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 500; }
+nav button:hover { color: var(--text); } nav button.active { color: var(--text); border-bottom-color: var(--primary); }
+main { max-width: 1280px; margin: 0 auto; padding: 1.25rem; }
+.tab { display: none; } .tab.active { display: block; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; margin-bottom: 1rem; }
+.card h2 { font-size: .95rem; font-weight: 620; margin-bottom: .75rem; display: flex; align-items: center; gap: .5rem; }
+.card h2 small { font-weight: 400; color: var(--muted); font-size: .76rem; }
+.grid { display: grid; gap: 1rem; } .g2 { grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); } .g4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.packs { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: .7rem; }
+@media (max-width: 900px) { .g2 { grid-template-columns: 1fr; } .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+label { display: block; font-size: .74rem; color: var(--muted); margin-bottom: .25rem; font-weight: 500; }
+input[type=text], input[type=password], input[type=number], select, textarea { width: 100%; background: var(--code); border: 1px solid var(--border); border-radius: 7px; color: var(--text); padding: .5rem .6rem; font: inherit; font-size: .86rem; }
+textarea { resize: vertical; min-height: 130px; line-height: 1.6; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
+input[type=range] { width: 100%; accent-color: var(--primary); }
+.row { display: flex; gap: .7rem; flex-wrap: wrap; align-items: flex-end; } .row > * { flex: 1; min-width: 130px; } .row > .fit { flex: none; min-width: 0; }
+.field { margin-bottom: .75rem; }
+.btn { background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); border-radius: 7px; padding: .5rem .85rem; font: inherit; font-size: .84rem; font-weight: 550; cursor: pointer; display: inline-flex; align-items: center; gap: .4rem; justify-content: center; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--primary); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; } .btn.primary:hover:not(:disabled) { background: var(--primary-2); }
+.btn.danger { color: var(--red); } .btn.danger:hover:not(:disabled) { border-color: var(--red); }
+.btn.sm { padding: .28rem .55rem; font-size: .76rem; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.chips { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.chip { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; color: var(--muted); padding: .18rem .65rem; font-size: .76rem; cursor: pointer; }
+.chip:hover, .chip.on { color: var(--text); border-color: var(--primary); }
+.badge { display: inline-block; padding: .08rem .5rem; border-radius: 999px; font-size: .7rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+.b-loaded { background: rgba(52,211,153,.13); color: var(--green); border-color: rgba(52,211,153,.35); }
+.b-cached { background: rgba(96,165,250,.13); color: var(--blue); border-color: rgba(96,165,250,.35); }
+.b-downloading { background: rgba(251,191,36,.13); color: var(--yellow); border-color: rgba(251,191,36,.35); }
+.b-registered, .b-unloaded { background: rgba(148,163,184,.12); color: var(--gray); border-color: rgba(148,163,184,.3); }
+.b-mod { background: rgba(167,139,250,.14); color: var(--accent); border-color: rgba(167,139,250,.35); text-transform: uppercase; letter-spacing: .03em; }
+.b-plain { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
+.meter .label { display: flex; justify-content: space-between; font-size: .74rem; color: var(--muted); margin-bottom: .3rem; }
+.meter .value { font-size: 1.25rem; font-weight: 650; letter-spacing: -.02em; } .meter .value small { font-size: .74rem; color: var(--muted); font-weight: 400; }
+.track { height: 6px; border-radius: 3px; background: var(--code); overflow: hidden; margin-top: .45rem; }
+.fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--primary), var(--accent)); width: 0; transition: width .4s; }
+.fill.warn { background: var(--yellow); } .fill.crit { background: var(--red); }
+.sub { font-size: .72rem; color: var(--faint); margin-top: .3rem; }
+table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+th { text-align: left; color: var(--muted); font-weight: 550; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; padding: .45rem .55rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: .55rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; } .tablewrap { overflow-x: auto; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; }
+.muted { color: var(--muted); } .faint { color: var(--faint); } .small { font-size: .76rem; }
+.actions { display: flex; gap: .3rem; flex-wrap: wrap; }
+.pack { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: .7rem .8rem; display: flex; flex-direction: column; gap: .35rem; }
+.pack .name { font-weight: 600; font-size: .86rem; } .pack .desc { font-size: .74rem; color: var(--muted); flex: 1; }
+pre { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: .75rem .85rem; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; line-height: 1.55; color: #c9d4ee; white-space: pre-wrap; word-break: break-word; position: relative; }
+.codebox { position: relative; } .codebox .copy { position: absolute; top: .45rem; right: .45rem; z-index: 2; }
+.stats { display: flex; gap: 1.1rem; flex-wrap: wrap; margin: .6rem 0; } .stat b { display: block; font-size: 1.02rem; } .stat span { font-size: .7rem; color: var(--muted); }
+canvas.wave { width: 100%; height: 76px; background: var(--code); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; display: block; }
+audio { width: 100%; height: 36px; margin-top: .5rem; }
+.drop { border: 1.5px dashed var(--border-2); border-radius: 9px; padding: 1rem; text-align: center; color: var(--muted); cursor: pointer; font-size: .84rem; }
+.drop.over, .drop:hover { border-color: var(--primary); color: var(--text); }
+.rec { width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--red); color: #fff; font-size: 1.3rem; cursor: pointer; flex: none; }
+.rec.on { animation: pulse 1.2s infinite; }
+.rec.blocked { background: var(--muted, #6b7280); opacity: .55; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(248,113,113,.6); } 70% { box-shadow: 0 0 0 16px rgba(248,113,113,0); } 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0); } }
+.transcript { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: .8rem; min-height: 90px; font-size: .98rem; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
+.seg { display: flex; gap: .7rem; padding: .4rem .55rem; border-bottom: 1px solid var(--border); cursor: pointer; font-size: .86rem; } .seg:hover { background: var(--panel-2); } .seg:last-child { border-bottom: 0; }
+.seg .t { color: var(--blue); font-family: ui-monospace, Menlo, monospace; font-size: .74rem; white-space: nowrap; padding-top: .15rem; }
+.seglist { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.note { background: rgba(96,165,250,.08); border: 1px solid rgba(96,165,250,.25); border-radius: 8px; padding: .5rem .7rem; font-size: .78rem; color: #b9cdf0; margin-bottom: .75rem; }
+.note.warn { background: rgba(251,191,36,.08); border-color: rgba(251,191,36,.3); color: #f3dfa5; }
+#toast { position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--panel-2); border: 1px solid var(--border-2); padding: .55rem 1rem; border-radius: 8px; font-size: .84rem; opacity: 0; transition: all .25s; z-index: 100; pointer-events: none; max-width: 90vw; }
+#toast.show { opacity: 1; transform: translateX(-50%); } #toast.err { border-color: var(--red); color: #fecaca; }
+.modal { position: fixed; inset: 0; background: rgba(3,6,14,.72); display: none; align-items: center; justify-content: center; z-index: 80; padding: 1rem; }
+.modal.show { display: flex; } .modal .box { background: var(--panel); border: 1px solid var(--border-2); border-radius: 12px; padding: 1.1rem; width: min(680px, 100%); max-height: 86vh; overflow-y: auto; }
+.spin { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: sp .7s linear infinite; display: inline-block; }
+@keyframes sp { to { transform: rotate(360deg); } }
+.subtabs { display: flex; gap: .3rem; margin-bottom: .7rem; }
+.check { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: var(--text); cursor: pointer; } .check input { accent-color: var(--primary); }
+.hidden { display: none !important; }
+</style>
 </head>
 <body>
+<header>
+  <div class="bar">
+    <div class="logo">AI</div>
+    <div class="brand"><h1>AI Serving Platform</h1><p>OpenAI-compatible speech API &middot; Phase 1: TTS + ASR</p></div>
+    <div class="spacer"></div>
+    <span class="pill" id="pill-device"><span class="dot" id="dot-health"></span><span id="txt-device">connecting</span></span>
+    <span class="pill" id="pill-mem">memory</span>
+    <span class="pill" id="pill-loaded">0 loaded</span>
+    <a class="pill" href="/docs" target="_blank">API docs</a>
+  </div>
+  <nav id="nav">
+    <button data-tab="models" class="active">Models</button>
+    <button data-tab="tts">Text to Speech</button>
+    <button data-tab="asr">Speech to Text</button>
+    <button data-tab="files">Saved Files</button>
+    <button data-tab="code">API Code</button>
+  </nav>
+</header>
+<main>
 
-  <header>
-    <div class="logo-group">
-      <div class="logo-icon">🎙️</div>
-      <div class="logo-text">
-        <h1>Indic-Speak & Transcribe</h1>
-        <p>OpenAI-Compatible Speech API (TTS & ASR)</p>
+<!-- ===================== MODELS ===================== -->
+<section class="tab active" id="tab-models">
+  <div class="grid g4" style="margin-bottom:1rem">
+    <div class="card meter" style="margin:0"><div class="label"><span>Unified memory</span><span id="m-mem-pct"></span></div><div class="value" id="m-mem">-</div><div class="track"><div class="fill" id="m-mem-bar"></div></div><div class="sub" id="m-mem-sub"></div></div>
+    <div class="card meter" style="margin:0"><div class="label"><span>GPU memory (MLX + MPS)</span></div><div class="value" id="m-gpu">-</div><div class="track"><div class="fill" id="m-gpu-bar"></div></div><div class="sub" id="m-gpu-sub"></div></div>
+    <div class="card meter" style="margin:0"><div class="label"><span>Hugging Face cache</span></div><div class="value" id="m-disk">-</div><div class="track"><div class="fill" id="m-disk-bar"></div></div><div class="sub" id="m-disk-sub"></div></div>
+    <div class="card meter" style="margin:0"><div class="label"><span>Loaded models</span></div><div class="value" id="m-loaded">-</div><div class="track"><div class="fill" id="m-loaded-bar"></div></div><div class="sub" id="m-loaded-sub"></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Model registry <small id="reg-count"></small><span class="spacer"></span><button class="btn sm" onclick="refreshModels(true)">Refresh</button></h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Model</th><th>Type</th><th>Backend</th><th>Size</th><th>State</th><th>Actions</th></tr></thead>
+      <tbody id="reg-body"><tr><td colspan="6" class="muted">Loading...</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card" style="margin:0">
+      <h2>Add a model from Hugging Face</h2>
+      <div class="row field">
+        <div><label for="hf-repo">Repository ID</label><input type="text" id="hf-repo" placeholder="e.g. mlx-community/whisper-large-v3-mlx" autocomplete="off"></div>
+        <button class="btn fit" id="hf-inspect-btn" onclick="inspectRepo()">Inspect</button>
       </div>
-    </div>
-    <div class="header-links">
-      <div class="status-pill">
-        <div class="status-dot"></div>
-        <span id="backend-status">API Ready</span>
+      <div id="hf-info" class="note hidden"></div>
+      <div class="row field">
+        <div><label for="hf-id">Model alias (id)</label><input type="text" id="hf-id" placeholder="used as `model` in API calls"></div>
+        <div><label for="hf-modality">Modality</label><select id="hf-modality">
+          <option value="tts">TTS (text to speech)</option><option value="asr">ASR (speech to text)</option>
+          <option value="llm">LLM (phase 2)</option><option value="vlm">VLM (phase 2)</option>
+          <option value="embedding">Embedding (phase 3)</option><option value="rerank">Rerank (phase 3)</option><option value="image_gen">Image gen (phase 4)</option>
+        </select></div>
       </div>
-      <a href="/docs" target="_blank" class="nav-btn">📖 Swagger Docs</a>
-      <a href="/v1/models" target="_blank" class="nav-btn">🤖 Models JSON</a>
-    </div>
-  </header>
-
-  <main>
-    <div class="tabs">
-      <button class="tab-btn active" onclick="switchTab('tts')">🔊 Text to Speech (TTS)</button>
-      <button class="tab-btn" onclick="switchTab('asr')">🎙️ Speech to Text (ASR)</button>
-      <button class="tab-btn" onclick="switchTab('files')">📁 Saved Files & Downloads</button>
-      <button class="tab-btn" onclick="switchTab('api')">💻 OpenAI API Code</button>
-    </div>
-
-    <!-- TAB 1: TTS -->
-    <div id="tab-tts" class="tab-content active">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">
-            <span>Text to Synthesize</span>
-            <span class="badge badge-primary">POST /v1/audio/speech</span>
-          </div>
-
-          <div class="form-group">
-            <textarea id="tts-input" placeholder="Type or paste text in any Indic language or English...">కరాగ్రే వసతే లక్ష్మీః కరమధ్యే సరస్వతీ కరమూలే తు గోవిందః ప్రభాతే కర దర్శనమ్‌</textarea>
-            <div class="preset-chips">
-              <span class="chip" onclick="setPreset('te')">🇮🇳 Telugu (కరాగ్రే...)</span>
-              <span class="chip" onclick="setPreset('hi')">🇮🇳 Hindi (विज्ञान...)</span>
-              <span class="chip" onclick="setPreset('ta')">🇮🇳 Tamil (வணக்கம்...)</span>
-              <span class="chip" onclick="setPreset('bn')">🇮🇳 Bengali (নমস্কার...)</span>
-              <span class="chip" onclick="setPreset('sa')">🇮🇳 Sanskrit (गायत्री...)</span>
-              <span class="chip" onclick="setPreset('en')">🇬🇧 English</span>
-            </div>
-          </div>
-
-          <div class="row-controls">
-            <div class="form-group">
-              <label for="tts-voice">Voice (44 Native Indic + OpenAI Aliases)</label>
-              <select id="tts-voice">
-                <!-- Dynamically populated from API -->
-                <optgroup label="OpenAI Standard Aliases">
-                  <option value="alloy">alloy (Amit - Hindi Male)</option>
-                  <option value="shimmer">shimmer (Sravani - Telugu Female)</option>
-                  <option value="echo">echo (Arun - Tamil Male)</option>
-                  <option value="fable">fable (Deepika - Kannada Female)</option>
-                  <option value="onyx">onyx (Vamsi - Telugu Male)</option>
-                  <option value="nova">nova (Kavya - Hindi Female)</option>
-                </optgroup>
-                <optgroup label="Telugu (te)">
-                  <option value="Sravani" selected>Sravani (Female)</option>
-                  <option value="Vamsi">Vamsi (Male)</option>
-                </optgroup>
-                <optgroup label="Hindi (hi)">
-                  <option value="Kavya">Kavya (Female)</option>
-                  <option value="Amit">Amit (Male)</option>
-                </optgroup>
-                <optgroup label="Tamil (ta)">
-                  <option value="Anitha">Anitha (Female)</option>
-                  <option value="Arun">Arun (Male)</option>
-                </optgroup>
-                <optgroup label="Kannada (kn)">
-                  <option value="Deepika">Deepika (Female)</option>
-                  <option value="Adarsh">Adarsh (Male)</option>
-                </optgroup>
-                <optgroup label="Bengali (bn)">
-                  <option value="Ishita">Ishita (Female)</option>
-                  <option value="Sourav">Sourav (Male)</option>
-                </optgroup>
-                <optgroup label="Marathi (mr)">
-                  <option value="Anagha">Anagha (Female)</option>
-                  <option value="Chinmay">Chinmay (Male)</option>
-                </optgroup>
-                <optgroup label="Gujarati (gu)">
-                  <option value="Dhara">Dhara (Female)</option>
-                  <option value="Parth">Parth (Male)</option>
-                </optgroup>
-                <optgroup label="Malayalam (ml)">
-                  <option value="Lakshmi">Lakshmi (Female)</option>
-                  <option value="Kiran">Kiran (Male)</option>
-                </optgroup>
-                <optgroup label="Sanskrit (sa)">
-                  <option value="Bharati">Bharati (Female)</option>
-                  <option value="Aryaman">Aryaman (Male)</option>
-                </optgroup>
-                <optgroup label="Punjabi (pa)">
-                  <option value="Kaur">Kaur (Female)</option>
-                  <option value="Manpreet">Manpreet (Male)</option>
-                </optgroup>
-                <optgroup label="Urdu (ur)">
-                  <option value="Saba">Saba (Female)</option>
-                  <option value="Zaid">Zaid (Male)</option>
-                </optgroup>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="tts-style">Vocal Emotion / Style</label>
-              <select id="tts-style">
-                <option value="NEUTRAL" selected>Neutral</option>
-                <option value="HAPPY">Happy</option>
-                <option value="SAD">Sad</option>
-                <option value="ANGER">Anger</option>
-                <option value="FEAR">Fear</option>
-                <option value="SURPRISE">Surprise</option>
-                <option value="news">News Anchor</option>
-                <option value="single person narration audiobook">Audiobook Narration</option>
-                <option value="children's stories">Children's Story</option>
-                <option value="advertisements">Advertisement</option>
-                <option value="Customer Care">Customer Care</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="row-controls">
-            <div class="form-group">
-              <label for="tts-model">Engine / Model</label>
-              <select id="tts-model">
-                <option value="indic-speak-mlx" selected>MLX (Apple Silicon GPU - Fast)</option>
-                <option value="indic-speak-torch">PyTorch (MPS/CPU)</option>
-                <option value="tts-1">tts-1 (OpenAI alias)</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="tts-format">Audio Format</label>
-              <select id="tts-format">
-                <option value="mp3" selected>MP3 (Default)</option>
-                <option value="wav">WAV (Lossless 24kHz)</option>
-                <option value="flac">FLAC</option>
-                <option value="pcm">Raw PCM (s16le)</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="tts-speed">Speed: <span id="speed-val">1.0</span>x</label>
-            <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.05" value="1.0" oninput="document.getElementById('speed-val').innerText = this.value">
-          </div>
-
-          <div class="btn-group">
-            <button class="btn btn-primary" id="btn-generate-tts" onclick="generateTTS(false)">
-              <span>▶️ Generate Audio (Save & Download)</span>
-            </button>
-            <button class="btn btn-secondary" id="btn-stream-tts" onclick="generateTTS(true)">
-              <span>🌊 Stream Directly</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">
-            <span>Audio Player & Output</span>
-            <span id="tts-loading" style="display:none;" class="badge badge-yellow">Generating...</span>
-          </div>
-
-          <div class="player-card">
-            <audio id="tts-audio-player" controls></audio>
-
-            <div class="stats-bar" id="tts-stats" style="display:none;">
-              <div class="stats-item">Duration: <span id="stat-duration">-</span></div>
-              <div class="stats-item">Gen Time: <span id="stat-time">-</span></div>
-              <div class="stats-item">RTF: <span id="stat-rtf">-</span></div>
-            </div>
-
-            <div style="margin-top: 1.25rem; display: flex; gap: 0.5rem;">
-              <a id="btn-download-tts" href="#" download="speech.mp3" class="btn btn-primary" style="display:none; text-decoration:none;">
-                <span>⬇️ Download Audio File</span>
-              </a>
-              <button id="btn-copy-tts-url" class="btn btn-secondary" style="display:none;" onclick="copyTTSUrl()">
-                <span>📋 Copy Audio URL</span>
-              </button>
-            </div>
-          </div>
-
-          <div style="margin-top: 1.5rem;">
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Direct API cURL Command:</p>
-            <pre><code id="tts-curl-box">curl -X POST http://localhost:8000/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model": "indic-speak-mlx", "input": "...", "voice": "Sravani", "response_format": "mp3"}' \
-  --output speech.mp3</code></pre>
-          </div>
-        </div>
+      <div class="row field">
+        <div><label for="hf-backend">Backend</label><select id="hf-backend"><option value="auto">Auto</option><option value="mlx">MLX (Apple Silicon)</option><option value="transformers">PyTorch MPS / CPU</option><option value="diffusers">Diffusers</option></select></div>
+        <div><label for="hf-quant">Quantization</label><select id="hf-quant"><option value="">Auto-detect</option><option>4bit</option><option>8bit</option><option>bf16</option><option>fp16</option><option>fp32</option><option>default</option></select></div>
+      </div>
+      <div class="field"><label for="hf-params">Default parameters (JSON, optional)</label><input type="text" id="hf-params" class="mono" placeholder='{"voice": "Amit", "language": "auto"}'></div>
+      <div class="actions">
+        <button class="btn primary" onclick="registerModel(true)">Register &amp; download</button>
+        <button class="btn" onclick="registerModel(false)">Register only</button>
       </div>
     </div>
 
-    <!-- TAB 2: ASR -->
-    <div id="tab-asr" class="tab-content">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">
-            <span>Speech Input</span>
-            <span class="badge badge-primary">POST /v1/audio/transcriptions</span>
-          </div>
-
-          <!-- Microphone Record -->
-          <div class="record-box" id="record-box">
-            <button class="rec-btn" id="rec-btn" onclick="toggleRecording()">🎤</button>
-            <div id="rec-status" style="font-size: 0.9rem; font-weight: 500;">Click to Record Voice</div>
-            <div id="rec-timer" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">00:00</div>
-          </div>
-
-          <div style="text-align: center; margin-bottom: 1rem; color: var(--text-muted); font-size: 0.85rem;">— OR UPLOAD AN AUDIO FILE —</div>
-
-          <div class="upload-zone" onclick="document.getElementById('asr-file-input').click()">
-            <input type="file" id="asr-file-input" accept="audio/*" style="display:none;" onchange="handleFileSelect(event)">
-            <p>📁 Click to Browse or Drag & Drop Audio</p>
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">WAV, MP3, M4A, OGG, WEBM, FLAC (any length)</p>
-            <p id="selected-filename" style="margin-top: 0.5rem; font-weight: 600; color: #818cf8;"></p>
-          </div>
-
-          <div class="row-controls">
-            <div class="form-group">
-              <label for="asr-lang">Language</label>
-              <select id="asr-lang">
-                <option value="auto" selected>🌐 Auto-detect Language</option>
-                <option value="te">Telugu (te)</option>
-                <option value="hi">Hindi (hi)</option>
-                <option value="ta">Tamil (ta)</option>
-                <option value="kn">Kannada (kn)</option>
-                <option value="bn">Bengali (bn)</option>
-                <option value="mr">Marathi (mr)</option>
-                <option value="gu">Gujarati (gu)</option>
-                <option value="ml">Malayalam (ml)</option>
-                <option value="sa">Sanskrit (sa)</option>
-                <option value="pa">Punjabi (pa)</option>
-                <option value="ur">Urdu (ur)</option>
-                <option value="en">English (en)</option>
-                <option value="as">Assamese (as)</option>
-                <option value="or">Odia (or)</option>
-                <option value="ne">Nepali (ne)</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="asr-mode">Script Mode</label>
-              <select id="asr-mode">
-                <option value="native" selected>Native Script (Default)</option>
-                <option value="mixed">Mixed Script / ITN (Latin digits & loans)</option>
-                <option value="romanised">Romanized (Latin transliteration)</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="row-controls">
-            <div class="form-group">
-              <label for="asr-format">Response Format</label>
-              <select id="asr-format">
-                <option value="verbose_json" selected>verbose_json (with Timestamps & Segments)</option>
-                <option value="json">json (Standard OpenAI)</option>
-                <option value="text">text (Plain Text)</option>
-                <option value="srt">srt (SubRip Subtitles)</option>
-                <option value="vtt">vtt (WebVTT Subtitles)</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="asr-model">Model</label>
-              <select id="asr-model">
-                <option value="indic-transcribe" selected>indic-transcribe (Bodhan AI)</option>
-                <option value="whisper-1">whisper-1 (OpenAI alias)</option>
-              </select>
-            </div>
-          </div>
-
-          <button class="btn btn-primary" id="btn-transcribe" onclick="transcribeAudio()">
-            <span>📝 Transcribe Audio</span>
-          </button>
-        </div>
-
-        <div class="card">
-          <div class="card-title">
-            <span>Transcription Result</span>
-            <div style="display:flex; gap: 0.5rem;">
-              <span id="asr-lang-badge" class="badge badge-green" style="display:none;">Detected: -</span>
-              <span id="asr-loading" class="badge badge-yellow" style="display:none;">Transcribing...</span>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <div id="asr-output" class="transcript-output">Your transcribed text will appear here...</div>
-          </div>
-
-          <div class="btn-group" style="margin-bottom: 1.25rem;">
-            <button class="btn btn-secondary" onclick="copyTranscript()">📋 Copy Text</button>
-            <button class="btn btn-secondary" onclick="downloadTranscript('txt')">⬇️ Download .txt</button>
-            <button class="btn btn-secondary" id="btn-dl-srt" style="display:none;" onclick="downloadTranscript('srt')">⬇️ Download .srt</button>
-          </div>
-
-          <div id="segments-container" style="display:none;">
-            <div class="card-title" style="font-size: 0.95rem;">Segments with Timestamps</div>
-            <div id="segments-list" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 6px;"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- TAB 3: SAVED FILES -->
-    <div id="tab-files" class="tab-content">
+    <div>
       <div class="card">
-        <div class="card-title">
-          <span>Saved Audio & Transcription Files</span>
-          <button class="btn btn-secondary" style="width:auto; padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="loadSavedFiles()">🔄 Refresh</button>
+        <h2>Recommended models <small>tested, one click</small></h2>
+        <div class="grid packs" id="packs"></div>
+        <p class="sub" style="margin-top:.6rem">Chat, vision, embedding, rerank and image models can be registered and downloaded already; serving them arrives in later phases.</p>
+      </div>
+      <div class="card" style="margin:0">
+        <h2>Memory &amp; download settings</h2>
+        <div class="row field">
+          <div><label for="set-max">Max loaded models</label><input type="number" id="set-max" min="1" max="16"></div>
+          <div><label for="set-free">Keep free (GB)</label><input type="number" id="set-free" min="0" step="0.5"></div>
+          <div><label for="set-idle">Unload idle after (min, 0 = never)</label><input type="number" id="set-idle" min="0" step="1"></div>
         </div>
-        <p class="card-subtitle">All files generated or transcribed are stored in <code>data/generated</code> and <code>data/transcriptions</code> and can be downloaded anytime.</p>
-
-        <div style="overflow-x: auto;">
-          <table>
-            <thead>
-              <tr>
-                <th>File / ID</th>
-                <th>Type</th>
-                <th>Details (Voice/Lang)</th>
-                <th>Duration</th>
-                <th>Date</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="files-table-body">
-              <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading files...</td></tr>
-            </tbody>
-          </table>
+        <div class="row field">
+          <div><label for="set-token">Hugging Face token <span id="set-token-state"></span></label><input type="password" id="set-token" placeholder="leave blank to keep current" autocomplete="off"></div>
+          <label class="check fit" style="margin-bottom:.55rem"><input type="checkbox" id="set-auto"> Auto-download on first use</label>
         </div>
+        <button class="btn" onclick="saveSettings()">Save settings</button>
+        <p class="sub">Least-recently-used models are unloaded to stay inside these limits. The token is held in memory only.</p>
       </div>
     </div>
+  </div>
+</section>
 
-    <!-- TAB 4: API CODE -->
-    <div id="tab-api" class="tab-content">
+<!-- ===================== TTS ===================== -->
+<section class="tab" id="tab-tts">
+  <div class="grid g2">
+    <div class="card" style="margin:0">
+      <h2>Text to speech <small>POST /v1/audio/speech</small></h2>
+      <div class="row field">
+        <div><label for="tts-model">Model</label><select id="tts-model"></select></div>
+        <div><label for="tts-voice">Voice</label><select id="tts-voice"></select></div>
+      </div>
+      <div class="chips" id="tts-presets"></div>
+      <div class="field"><textarea id="tts-text" placeholder="Type text to synthesise..."></textarea><div class="sub"><span id="tts-chars">0</span> characters</div></div>
+      <div class="row field">
+        <div id="tts-style-wrap"><label for="tts-style">Style / emotion</label><select id="tts-style"></select></div>
+        <div><label for="tts-format">Format</label><select id="tts-format"><option value="mp3">MP3</option><option value="wav">WAV (24 kHz)</option><option value="flac">FLAC</option><option value="pcm">PCM s16le</option></select></div>
+        <div><label for="tts-speed">Speed <span id="tts-speed-val">1.00x</span></label><input type="range" id="tts-speed" min="0.25" max="4" step="0.05" value="1"></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="tts-gen" onclick="generateTTS(false)">Generate &amp; download</button>
+        <button class="btn" id="tts-stream" onclick="generateTTS(true)">Stream directly</button>
+        <button class="btn hidden" id="tts-stop" onclick="stopStream()">Stop</button>
+      </div>
+      <p class="sub" id="tts-hint"></p>
+    </div>
+    <div>
       <div class="card">
-        <div class="card-title">Official OpenAI Python SDK Integration</div>
-        <p class="card-subtitle">This server is a 100% drop-in replacement for OpenAI TTS and Whisper endpoints. Set <code>base_url="http://localhost:8000/v1"</code>.</p>
-
-        <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem 0;">1. Text-to-Speech (TTS)</h3>
-        <pre><code>from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="not-needed"  # Local API does not require key
-)
-
-# Synthesize speech
-response = client.audio.speech.create(
-    model="indic-speak-mlx",     # or "indic-speak", "tts-1"
-    voice="Sravani",             # 44 Indic voices or alloy, echo, nova, etc.
-    input="కరాగ్రే వసతే లక్ష్మీః కరమధ్యే సరస్వతీ",
-    response_format="mp3"        # mp3, wav, flac, pcm
-)
-
-# Save to file
-response.stream_to_file("output.mp3")</code></pre>
-
-        <h3 style="font-size: 0.95rem; margin: 1.5rem 0 0.5rem 0;">2. Automatic Speech Recognition (ASR / Whisper)</h3>
-        <pre><code># Transcribe audio file
-with open("output.mp3", "rb") as audio_file:
-    transcription = client.audio.transcriptions.create(
-        model="indic-transcribe",  # or "whisper-1"
-        file=audio_file,
-        language="te"              # or None for auto-detect
-    )
-
-print("Transcription:", transcription.text)</code></pre>
-
-        <h3 style="font-size: 0.95rem; margin: 1.5rem 0 0.5rem 0;">3. Streaming Audio Playback via cURL</h3>
-        <pre><code># Stream direct audio chunks:
-curl -X POST http://localhost:8000/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model": "indic-speak-mlx", "input": "నమస్కారం, ఇది ప్రత్యక్ష ప్రసారం", "voice": "Sravani", "stream": true, "response_format": "wav"}' \
-  | ffplay -nodisp -autoexit -i -</code></pre>
+        <h2>Output <small id="tts-status"></small></h2>
+        <canvas class="wave" id="tts-wave" width="1200" height="152"></canvas>
+        <audio id="tts-audio" controls></audio>
+        <div class="stats" id="tts-stats"></div>
+        <div class="actions"><a class="btn hidden" id="tts-download">Download audio</a></div>
+      </div>
+      <div class="card" style="margin:0">
+        <h2>Request <span class="spacer"></span>
+          <button class="btn sm" data-ttscode="curl" onclick="setTtsCode('curl')">cURL</button>
+          <button class="btn sm" data-ttscode="python" onclick="setTtsCode('python')">Python</button></h2>
+        <div class="codebox"><button class="btn sm copy" onclick="copyText(document.getElementById('tts-code').textContent)">Copy</button><pre id="tts-code"></pre></div>
       </div>
     </div>
-  </main>
+  </div>
+</section>
 
-  <div class="toast" id="toast">Message</div>
+<!-- ===================== ASR ===================== -->
+<section class="tab" id="tab-asr">
+  <div class="grid g2">
+    <div class="card" style="margin:0">
+      <h2>Speech to text <small>POST /v1/audio/transcriptions</small></h2>
+      <div class="field"><label for="asr-model">Model</label><select id="asr-model"></select></div>
+      <div class="row field" style="align-items:center">
+        <button class="rec fit" id="rec-btn" onclick="toggleRecording()" title="Record from microphone" aria-label="Record from microphone">&#9679;</button>
+        <div><div id="rec-status" style="font-weight:550">Record from microphone</div><div class="mono muted" id="rec-timer">00:00</div></div>
+      </div>
+      <div class="drop field" id="asr-drop" onclick="document.getElementById('asr-file').click()">Drop an audio file here or click to browse<br><span class="small faint">WAV, MP3, M4A, OGG, WEBM, FLAC</span></div>
+      <input type="file" id="asr-file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm,.flac" class="hidden">
+      <div id="asr-selected" class="small muted field"></div>
+      <audio id="asr-audio" controls class="hidden"></audio>
+      <div class="row field" style="margin-top:.75rem">
+        <div><label for="asr-lang">Language</label><select id="asr-lang"></select></div>
+        <div><label for="asr-mode">Script mode</label><select id="asr-mode"></select></div>
+      </div>
+      <div class="row field">
+        <div><label for="asr-format">Response format</label><select id="asr-format"><option>verbose_json</option><option>json</option><option>text</option><option>srt</option><option>vtt</option></select></div>
+        <div><label for="asr-chunk">Segment length</label><select id="asr-chunk"><option value="30">Up to 30 s (most accurate)</option><option value="15">Up to 15 s</option><option value="8">Up to 8 s (subtitles)</option></select></div>
+        <div><label for="asr-task">Task</label><select id="asr-task"><option value="transcribe">Transcribe</option><option value="translate">Translate / romanise</option></select></div>
+      </div>
+      <button class="btn primary" id="asr-go" onclick="transcribeAudio()" disabled>Transcribe</button>
+      <p class="sub" id="asr-hint"></p>
+    </div>
+    <div class="card" style="margin:0">
+      <h2>Result <span id="asr-badges"></span></h2>
+      <div class="transcript" id="asr-output"><span class="faint">The transcript appears here.</span></div>
+      <div class="stats" id="asr-stats"></div>
+      <div class="actions" style="margin-bottom:.75rem">
+        <button class="btn sm" onclick="copyText(lastAsr.text)">Copy text</button>
+        <button class="btn sm" onclick="exportTranscript('txt')">.txt</button>
+        <button class="btn sm" onclick="exportTranscript('srt')">.srt</button>
+        <button class="btn sm" onclick="exportTranscript('vtt')">.vtt</button>
+        <button class="btn sm" onclick="exportTranscript('json')">.json</button>
+      </div>
+      <div id="asr-segs-wrap" class="hidden"><label>Segments (click to play from that point)</label><div class="seglist" id="asr-segs"></div></div>
+      <div id="asr-raw-wrap" class="hidden" style="margin-top:.75rem"><label>Raw API response</label><pre id="asr-raw"></pre></div>
+    </div>
+  </div>
+</section>
 
-  <script>
-    let currentAudioBlob = null;
-    let mediaRecorder = null;
-    let recordTimer = null;
-    let recordStartTime = 0;
-    let currentTTSFileUrl = null;
-    let lastTranscriptData = null;
+<!-- ===================== FILES ===================== -->
+<section class="tab" id="tab-files">
+  <div class="card">
+    <h2>Saved files &amp; history <small id="files-count"></small></h2>
+    <div class="row field">
+      <div><input type="text" id="files-search" placeholder="Search text, model, voice, id..." oninput="renderFiles()"></div>
+      <div class="fit" style="min-width:150px"><select id="files-type" onchange="renderFiles()"><option value="">All types</option><option value="tts">TTS audio</option><option value="asr">ASR transcripts</option></select></div>
+      <button class="btn fit" onclick="loadFiles()">Refresh</button>
+    </div>
+    <audio id="files-audio" controls class="hidden"></audio>
+    <div class="tablewrap"><table>
+      <thead><tr><th>File</th><th>Type</th><th>Model</th><th>Created</th><th>Length</th><th>Content</th><th>Actions</th></tr></thead>
+      <tbody id="files-body"></tbody>
+    </table></div>
+  </div>
+</section>
 
-    const PRESETS = {
-      te: "కరాగ్రే వసతే లక్ష్మీః కరమధ్యే సరస్వతీ కరమూలే తు గోవిందః ప్రభాతే కర దర్శనమ్‌",
-      hi: "नमस्ते, आज हम विज्ञान पढ़ेंगे। प्रकाश की चाल लगभग तीन लाख किलोमीटर प्रति सेकंड होती है।",
-      ta: "வணக்கம்! நீங்கள் கேட்ட கேள்விக்கு பதில் இதோ. நன்றி.",
-      bn: "নমস্কার, আজ আবহাওয়া খুব মনোরম। আশা করি আপনার দিনটি শুভ হোক।",
-      sa: "ॐ भूर्भुवः स्वः तत्सवितुर्वरेण्यं भर्गो देवस्य धीमहि धियो यो नः प्रचोदयात्",
-      en: "Welcome to the Indic Speech platform. This is an OpenAI-compatible text-to-speech and speech recognition engine."
+<!-- ===================== CODE ===================== -->
+<section class="tab" id="tab-code">
+  <div class="card">
+    <h2>OpenAI SDK integration <small>follows the model and options selected in the playgrounds</small></h2>
+    <div class="subtabs">
+      <button class="btn sm" data-lang="python" onclick="setCodeLang('python')">Python</button>
+      <button class="btn sm" data-lang="js" onclick="setCodeLang('js')">JavaScript / TypeScript</button>
+      <button class="btn sm" data-lang="curl" onclick="setCodeLang('curl')">cURL</button>
+    </div>
+    <label>Text to speech</label><div class="codebox field"><button class="btn sm copy" onclick="copyText(document.getElementById('code-tts').textContent)">Copy</button><pre id="code-tts"></pre></div>
+    <label>Speech to text</label><div class="codebox field"><button class="btn sm copy" onclick="copyText(document.getElementById('code-asr').textContent)">Copy</button><pre id="code-asr"></pre></div>
+    <label>Model management</label><div class="codebox"><button class="btn sm copy" onclick="copyText(document.getElementById('code-mgmt').textContent)">Copy</button><pre id="code-mgmt"></pre></div>
+  </div>
+</section>
+</main>
+
+<div class="modal" id="modal"><div class="box"><div id="modal-body"></div></div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const state = { models: [], status: null, voices: null, langs: null, files: [], tasks: {}, ttsCode: "curl", codeLang: "python" };
+let lastAsr = { text: "", segments: [], fileId: null, raw: "" };
+
+const PRESETS = {
+  Hindi: { voice: "Kavya", text: "नमस्ते! आज हम विज्ञान पढ़ेंगे। प्रकाश की चाल लगभग तीन लाख किलोमीटर प्रति सेकंड होती है।" },
+  Telugu: { voice: "Sravani", text: "నమస్కారం! ఈ రోజు మనం ఒక కొత్త విషయం నేర్చుకుందాం. చదువు మనిషికి నిజమైన సంపద." },
+  Tamil: { voice: "Anitha", text: "வணக்கம்! இன்று நாம் ஒரு புதிய பாடத்தைக் கற்றுக்கொள்வோம். கல்வியே உண்மையான செல்வம்." },
+  Bengali: { voice: "Ishita", text: "নমস্কার! আজ আমরা একটি নতুন বিষয় শিখব। জ্ঞানই মানুষের প্রকৃত সম্পদ।" },
+  Sanskrit: { voice: "Bharati", text: "कराग्रे वसते लक्ष्मीः करमध्ये सरस्वती। करमूले तु गोविन्दः प्रभाते करदर्शनम्॥" },
+  English: { voice: "Amit", text: "Hello! This is a test of the speech synthesis engine. The speed of light is about three hundred thousand kilometres per second." },
+};
+
+// ---------- helpers ----------
+function toast(msg, isErr) { const t = $("toast"); t.textContent = msg; t.className = "show" + (isErr ? " err" : ""); clearTimeout(toast._t); toast._t = setTimeout(() => t.className = "", isErr ? 5000 : 2400); }
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    let msg = res.status + " " + res.statusText;
+    try { const j = await res.json(); msg = (j.error && j.error.message) || j.detail || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  return res;
+}
+const getJSON = async (path) => (await api(path)).json();
+const postJSON = async (path, body) => (await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })).json();
+async function copyText(text) { try { await navigator.clipboard.writeText(text || ""); toast("Copied"); } catch (e) { toast("Copy failed", true); } }
+const fmtSize = mb => mb == null ? "-" : mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
+const fmtDur = s => { if (s == null) return "-"; s = Math.round(s); return s >= 60 ? Math.floor(s / 60) + "m " + (s % 60) + "s" : s + "s"; };
+const fmtClock = s => { const m = Math.floor(s / 60), r = s - m * 60; return String(m).padStart(2, "0") + ":" + r.toFixed(1).padStart(4, "0"); };
+function busy(btn, on, label) { if (on) { btn.dataset.label = btn.innerHTML; btn.innerHTML = '<span class="spin"></span> ' + esc(label || "Working"); btn.disabled = true; } else { btn.innerHTML = btn.dataset.label || btn.innerHTML; btn.disabled = false; } }
+function showModal(html) { $("modal-body").innerHTML = html; $("modal").classList.add("show"); }
+function closeModal() { $("modal").classList.remove("show"); }
+$("modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
+function download(name, text, type) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: type || "text/plain" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+
+// ---------- tabs ----------
+function switchTab(name) {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
+  if (name === "files") loadFiles();
+  if (name === "code") renderCode();
+  if (name === "models") refreshModels();
+  history.replaceState(null, "", "#" + name);
+}
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+// ---------- system status ----------
+async function refreshStatus() {
+  try {
+    const s = state.status = await getJSON("/v1/system/status");
+    $("dot-health").className = "dot ok";
+    $("txt-device").textContent = s.device.chip + " · " + s.device.accelerator.toUpperCase();
+    $("pill-mem").textContent = s.memory.used_gb.toFixed(1) + " / " + s.memory.total_gb.toFixed(0) + " GB";
+    $("pill-loaded").textContent = s.models.loaded + " loaded";
+    const pct = 100 * s.memory.used_gb / s.memory.total_gb;
+    $("m-mem").innerHTML = s.memory.used_gb.toFixed(1) + " <small>/ " + s.memory.total_gb.toFixed(0) + " GB used</small>";
+    $("m-mem-pct").textContent = pct.toFixed(0) + "%";
+    setBar("m-mem-bar", pct);
+    $("m-mem-sub").textContent = s.memory.free_gb.toFixed(1) + " GB free · " + s.memory.wired_gb.toFixed(1) + " GB wired · server " + s.memory.process_rss_gb.toFixed(1) + " GB";
+    const mlx = s.mlx.available ? s.mlx.active_gb : 0, mps = s.mps.available ? s.mps.allocated_gb : 0;
+    $("m-gpu").innerHTML = (mlx + mps).toFixed(1) + " <small>GB in use</small>";
+    setBar("m-gpu-bar", 100 * (mlx + mps) / s.memory.total_gb);
+    $("m-gpu-sub").textContent = "MLX " + mlx.toFixed(1) + " GB (+" + (s.mlx.cache_gb || 0).toFixed(1) + " cache) · MPS " + mps.toFixed(1) + " GB";
+    $("m-disk").innerHTML = s.disk.hf_cache_gb.toFixed(1) + " <small>GB of weights</small>";
+    setBar("m-disk-bar", 100 * (1 - s.disk.disk_free_gb / s.disk.disk_total_gb));
+    $("m-disk-sub").textContent = s.disk.disk_free_gb.toFixed(0) + " GB free on disk";
+    const max = s.settings.max_loaded_models;
+    $("m-loaded").innerHTML = s.models.loaded + " <small>/ " + max + " max · " + s.models.registered + " registered</small>";
+    setBar("m-loaded-bar", 100 * s.models.loaded / max);
+    $("m-loaded-sub").textContent = s.loaded_models.map(m => m.id).join(", ") || "Models load on first request";
+    fillSettings(s.settings);
+  } catch (e) { $("dot-health").className = "dot bad"; $("txt-device").textContent = "server unreachable"; }
+}
+function setBar(id, pct) { const el = $(id); el.style.width = Math.max(0, Math.min(100, pct)) + "%"; el.className = "fill" + (pct > 90 ? " crit" : pct > 75 ? " warn" : ""); }
+let settingsFilled = false;
+function fillSettings(s) {
+  if (settingsFilled) return; settingsFilled = true;
+  $("set-max").value = s.max_loaded_models; $("set-free").value = s.min_free_memory_gb; $("set-idle").value = s.idle_unload_minutes;
+  $("set-auto").checked = !!s.auto_download; $("set-token-state").textContent = s.hf_token_set ? "(set)" : "(not set)";
+}
+async function saveSettings() {
+  const body = { max_loaded_models: +$("set-max").value, min_free_memory_gb: +$("set-free").value, idle_unload_minutes: +$("set-idle").value, auto_download: $("set-auto").checked };
+  if ($("set-token").value.trim()) body.hf_token = $("set-token").value.trim();
+  try { const s = await postJSON("/v1/system/settings", body); $("set-token").value = ""; $("set-token-state").textContent = s.hf_token_set ? "(set)" : "(not set)"; toast("Settings saved"); refreshStatus(); } catch (e) { toast(e.message, true); }
+}
+
+// ---------- model registry ----------
+async function refreshModels(force) {
+  try {
+    const data = await getJSON("/v1/models?include_aliases=false");
+    state.models = data.data;
+    renderRegistry(); fillModelSelects();
+    if (force) { loadPacks(); toast("Refreshed"); }
+  } catch (e) { if (force) toast(e.message, true); }
+}
+function renderRegistry() {
+  const rows = state.models.map(m => {
+    const task = state.tasks[m.id];
+    let stateCell = '<span class="badge b-' + esc(m.status) + '">' + esc(m.status) + "</span>";
+    if (m.status === "downloading" && task) {
+      const sp = task.speed_bps ? (task.speed_bps / 1048576).toFixed(1) + " MB/s" : "";
+      stateCell += '<div class="track" style="width:130px"><div class="fill" style="width:' + (task.progress || 0) + '%"></div></div><div class="sub">' + (task.progress || 0).toFixed(0) + "% " + sp + (task.eta_seconds ? " · " + fmtDur(task.eta_seconds) + " left" : "") + "</div>";
+    } else if (m.status === "loaded" && m.memory_mb != null) stateCell += '<div class="sub">' + fmtSize(m.memory_mb) + " in memory</div>";
+    const id = esc(m.id), a = [];
+    if (!m.supported) a.push('<span class="badge b-plain" title="Serving this modality arrives in a later phase">not servable yet</span>');
+    if (m.status === "loaded") a.push('<button class="btn sm" onclick="modelAction(this,\'' + id + '\',\'unload\')">Unload</button>');
+    else if (m.status === "cached" && m.supported) a.push('<button class="btn sm primary" onclick="modelAction(this,\'' + id + '\',\'load\')">Load</button>');
+    if (m.status === "registered") a.push('<button class="btn sm primary" onclick="startDownload(\'' + id + '\')">Download</button>');
+    if (m.supported && !m.is_default) a.push('<button class="btn sm" onclick="modelAction(this,\'' + id + '\',\'default\')" title="Use for tts-1 / whisper-1 and when no model is given">Set default</button>');
+    if (m.supported) a.push('<button class="btn sm" onclick="openPlayground(\'' + id + "','" + esc(m.modality) + '\')">Playground</button>');
+    if (m.status !== "downloading") a.push('<button class="btn sm danger" onclick="confirmDelete(\'' + id + '\')">Delete</button>');
+    return "<tr><td><div style=\"font-weight:600\">" + id + (m.is_default ? ' <span class="badge b-loaded" title="Default for its modality">default</span>' : "") + '</div><div class="small"><a href="https://huggingface.co/' + esc(m.repo_id) + '" target="_blank" class="mono">' + esc(m.repo_id) + "</a></div>" +
+      (m.aliases.length ? '<div class="sub">also: ' + esc(m.aliases.join(", ")) + "</div>" : "") + "</td>" +
+      '<td><span class="badge b-mod">' + esc(m.modality) + "</span></td><td>" + esc(m.backend) + '<div class="sub">' + esc(m.quantization) + "</div></td><td>" + fmtSize(m.size_mb) + "</td><td>" + stateCell + '</td><td><div class="actions">' + a.join("") + "</div></td></tr>";
+  });
+  $("reg-body").innerHTML = rows.join("") || '<tr><td colspan="6" class="muted">No models registered. Add one below.</td></tr>';
+  $("reg-count").textContent = state.models.length + " registered";
+}
+async function modelAction(btn, id, action) {
+  busy(btn, true, action === "load" ? "Loading" : action === "unload" ? "Unloading" : "Saving");
+  try { await postJSON("/v1/models/" + encodeURIComponent(id) + "/" + action); toast(id + ": " + (action === "default" ? "set as default" : action + "ed")); }
+  catch (e) { toast(e.message, true); }
+  await refreshModels(); refreshStatus();
+}
+async function startDownload(id) {
+  try { const t = await postJSON("/v1/models/" + encodeURIComponent(id) + "/download"); trackTask(id, t.task_id); toast("Downloading " + id); refreshModels(); }
+  catch (e) { toast(e.message, true); }
+}
+function trackTask(modelId, taskId) {
+  const poll = async () => {
+    try {
+      const t = await getJSON("/v1/models/tasks/" + taskId);
+      state.tasks[modelId] = t;
+      if (t.status === "in_progress") { renderRegistry(); setTimeout(poll, 800); return; }
+      delete state.tasks[modelId];
+      toast(t.status === "completed" ? modelId + " downloaded" : "Download failed: " + (t.error || "unknown error"), t.status !== "completed");
+    } catch (e) { delete state.tasks[modelId]; }
+    refreshModels(); refreshStatus();
+  };
+  poll();
+}
+function confirmDelete(id) {
+  showModal('<h2 style="margin-bottom:.6rem">Delete ' + esc(id) + '?</h2><p class="muted" style="margin-bottom:.8rem">Removes the model from the registry and unloads it.</p>' +
+    '<label class="check" style="margin-bottom:1rem"><input type="checkbox" id="del-files"> Also delete the downloaded weights from disk</label>' +
+    '<div class="actions"><button class="btn danger" onclick="doDelete(\'' + esc(id) + '\')">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>');
+}
+async function doDelete(id) {
+  const files = $("del-files").checked; closeModal();
+  try { const r = await (await api("/v1/models/" + encodeURIComponent(id) + "?delete_files=" + files, { method: "DELETE" })).json(); toast(id + " deleted" + (r.freed_mb ? " (" + fmtSize(r.freed_mb) + " freed)" : "")); }
+  catch (e) { toast(e.message, true); }
+  await refreshModels(); loadPacks(); refreshStatus(); loadCatalogs();
+}
+function openPlayground(id, modality) {
+  const sel = $(modality === "tts" ? "tts-model" : "asr-model"); sel.value = id; sel.dispatchEvent(new Event("change")); switchTab(modality);
+}
+
+// ---------- recommended + add from HF ----------
+async function loadPacks() {
+  try {
+    const packs = (await getJSON("/v1/models/recommended")).data;
+    $("packs").innerHTML = packs.map(p => '<div class="pack"><div class="name">' + esc(p.id) + '</div><div><span class="badge b-mod">' + esc(p.modality) + '</span> <span class="badge b-plain">' + esc(p.backend) + "</span></div>" +
+      '<div class="desc">' + esc(p.description) + '</div><div class="mono faint" style="font-size:.68rem">' + esc(p.repo_id) + "</div>" +
+      (p.registered_as ? '<button class="btn sm" disabled>Registered as ' + esc(p.registered_as) + "</button>"
+        : '<button class="btn sm primary" onclick="addPack(this,\'' + esc(p.repo_id) + "','" + esc(p.id) + "','" + esc(p.modality) + "','" + esc(p.backend) + "','" + esc(p.quantization) + '\')">Add</button>') + "</div>").join("");
+  } catch (e) {}
+}
+async function addPack(btn, repo_id, id, modality, backend, quantization) {
+  busy(btn, true, "Adding");
+  try { await postJSON("/v1/models/register", { repo_id, id, modality, backend, quantization }); toast(id + " registered"); }
+  catch (e) { toast(e.message, true); }
+  await refreshModels(); loadPacks(); loadCatalogs();
+}
+async function inspectRepo() {
+  const repo = $("hf-repo").value.trim(); if (!repo) return toast("Enter a repository id", true);
+  const btn = $("hf-inspect-btn"); busy(btn, true, "Inspecting");
+  try {
+    const d = await getJSON("/v1/hf/inspect?repo_id=" + encodeURIComponent(repo)), s = d.suggested;
+    $("hf-id").value = s.id; $("hf-modality").value = s.modality; $("hf-backend").value = s.backend; $("hf-quant").value = s.quantization === "default" ? "" : s.quantization;
+    $("hf-params").value = Object.keys(s.default_params || {}).length ? JSON.stringify(s.default_params) : "";
+    const info = $("hf-info"); info.classList.remove("hidden"); info.className = "note" + (d.supported ? "" : " warn");
+    info.innerHTML = "<b>" + esc(d.repo_id) + "</b> &middot; " + esc(d.pipeline_tag || "no pipeline tag") + " &middot; " + fmtSize(d.size_mb) + " in " + d.num_files + " files" +
+      (d.license ? " &middot; " + esc(d.license) : "") + (d.gated ? " &middot; gated" : "") + (d.cached ? " &middot; already on disk" : "") +
+      "<br>Detected: <b>" + esc(s.modality.toUpperCase()) + "</b>, backend <b>" + esc(s.backend) + "</b>, quantization <b>" + esc(s.quantization) + "</b>" + (s.adapter ? ", engine <b>" + esc(s.adapter) + "</b>" : "") +
+      (d.registered_as.length ? "<br>Already registered as " + esc(d.registered_as.join(", ")) : "") + (d.notes.length ? "<br>" + d.notes.map(esc).join("<br>") : "");
+  } catch (e) { toast(e.message, true); }
+  busy(btn, false);
+}
+async function registerModel(andDownload) {
+  const repo_id = $("hf-repo").value.trim(); if (!repo_id) return toast("Enter a repository id", true);
+  const body = { repo_id, modality: $("hf-modality").value, backend: $("hf-backend").value };
+  if ($("hf-id").value.trim()) body.id = $("hf-id").value.trim();
+  if ($("hf-quant").value) body.quantization = $("hf-quant").value;
+  if ($("hf-params").value.trim()) { try { body.default_params = JSON.parse($("hf-params").value); } catch (e) { return toast("Default parameters must be valid JSON", true); } }
+  try {
+    const m = await postJSON("/v1/models/register", body); toast(m.id + " registered");
+    await refreshModels(); loadPacks(); loadCatalogs();
+    if (andDownload && m.status !== "cached") startDownload(m.id);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- catalogs / selects ----------
+async function loadCatalogs() {
+  try { [state.voices, state.langs] = await Promise.all([getJSON("/v1/audio/voices"), getJSON("/v1/audio/languages")]); } catch (e) { return; }
+  fillVoices(); fillLanguages();
+}
+function fillModelSelects() {
+  for (const [selId, modality] of [["tts-model", "tts"], ["asr-model", "asr"]]) {
+    const sel = $(selId), prev = sel.value, list = state.models.filter(m => m.modality === modality && m.supported);
+    sel.innerHTML = list.map(m => '<option value="' + esc(m.id) + '">' + esc(m.id) + " · " + esc(m.status) + (m.is_default ? " · default" : "") + "</option>").join("");
+    const def = list.find(m => m.is_default);
+    sel.value = list.some(m => m.id === prev) ? prev : def ? def.id : (list[0] ? list[0].id : "");
+  }
+  updateHints();
+}
+function updateHints() {
+  const t = state.models.find(m => m.id === $("tts-model").value), a = state.models.find(m => m.id === $("asr-model").value);
+  const hint = m => !m ? "No model registered for this modality. Add one in the Models tab." : m.status === "loaded" ? "" : m.status === "cached" ? "Model is on disk; the first request loads it into memory." : m.status === "downloading" ? "Model is downloading; requests wait for it." : "Model is not downloaded; the first request downloads it.";
+  $("tts-hint").textContent = hint(t); $("asr-hint").textContent = hint(a);
+}
+function fillVoices() {
+  const cat = state.voices && state.voices.models[$("tts-model").value]; if (!cat) return;
+  const sel = $("tts-voice"), prev = sel.value, groups = {};
+  for (const [name, v] of Object.entries(cat.voices)) (groups[v.lang_name || "Voices"] = groups[v.lang_name || "Voices"] || []).push([name, v]);
+  let html = "";
+  for (const g of Object.keys(groups).sort()) html += '<optgroup label="' + esc(g) + '">' + groups[g].map(([n, v]) => '<option value="' + esc(n) + '">' + esc(n) + (v.gender ? " (" + esc(v.gender) + ")" : "") + (v.desc ? " – " + esc(v.desc) : "") + "</option>").join("") + "</optgroup>";
+  const aliases = Object.entries(cat.openai_aliases || {});
+  if (aliases.length) html += '<optgroup label="OpenAI aliases">' + aliases.map(([a, n]) => '<option value="' + esc(a) + '">' + esc(a) + " → " + esc(n) + "</option>").join("") + "</optgroup>";
+  sel.innerHTML = html;
+  sel.value = [...sel.options].some(o => o.value === prev) ? prev : cat.default_voice;
+  $("tts-style").innerHTML = (cat.styles || []).map(s => "<option>" + esc(s) + "</option>").join("");
+  $("tts-style-wrap").classList.toggle("hidden", !(cat.styles || []).length);
+  renderTtsCode();
+}
+function fillLanguages() {
+  const cat = state.langs && state.langs.models[$("asr-model").value]; if (!cat) return;
+  const sel = $("asr-lang"), prev = sel.value;
+  sel.innerHTML = Object.entries(cat.languages).map(([c, n]) => '<option value="' + esc(c) + '">' + esc(n) + (c === "auto" ? "" : " (" + esc(c) + ")") + "</option>").join("");
+  sel.value = cat.languages[prev] ? prev : "auto";
+  $("asr-mode").innerHTML = cat.modes.map(m => "<option>" + esc(m) + "</option>").join(""); $("asr-mode").disabled = cat.modes.length < 2;
+}
+$("tts-model").addEventListener("change", () => { fillVoices(); updateHints(); });
+$("asr-model").addEventListener("change", () => { fillLanguages(); updateHints(); });
+
+// ---------- TTS ----------
+$("tts-presets").innerHTML = Object.keys(PRESETS).map(k => '<button class="chip" onclick="setPreset(\'' + k + '\')">' + k + "</button>").join("");
+function setPreset(k) {
+  $("tts-text").value = PRESETS[k].text;
+  if ([...$("tts-voice").options].some(o => o.value === PRESETS[k].voice)) $("tts-voice").value = PRESETS[k].voice;
+  updateTtsInputs();
+}
+function updateTtsInputs() { $("tts-chars").textContent = $("tts-text").value.length; $("tts-speed-val").textContent = (+$("tts-speed").value).toFixed(2) + "x"; renderTtsCode(); }
+["tts-text", "tts-speed"].forEach(id => $(id).addEventListener("input", updateTtsInputs));
+["tts-voice", "tts-style", "tts-format"].forEach(id => $(id).addEventListener("change", renderTtsCode));
+function ttsPayload() {
+  const p = { model: $("tts-model").value, input: $("tts-text").value, voice: $("tts-voice").value, response_format: $("tts-format").value, speed: +$("tts-speed").value };
+  if (!$("tts-style-wrap").classList.contains("hidden") && $("tts-style").value && $("tts-style").value !== "NEUTRAL") p.style = $("tts-style").value;
+  return p;
+}
+function ttsStats(items) { $("tts-stats").innerHTML = items.filter(i => i[1] != null).map(i => '<div class="stat"><b>' + esc(i[1]) + "</b><span>" + esc(i[0]) + "</span></div>").join(""); }
+function setDownload(url, name) { const a = $("tts-download"); if (!url) return a.classList.add("hidden"); a.href = url; a.download = name || ""; a.classList.remove("hidden"); }
+
+let audioCtx = null, streamAbort = null, streamNodes = [];
+async function generateTTS(streaming) {
+  const payload = ttsPayload(); if (!payload.input.trim()) return toast("Enter some text first", true);
+  const btn = $(streaming ? "tts-stream" : "tts-gen"), other = $(streaming ? "tts-gen" : "tts-stream");
+  const model = state.models.find(m => m.id === payload.model);
+  busy(btn, true, model && model.status !== "loaded" ? "Loading model" : streaming ? "Streaming" : "Generating"); other.disabled = true;
+  $("tts-status").textContent = ""; setDownload(null); ttsStats([]);
+  try { streaming ? await streamTTS(payload) : await plainTTS(payload); } catch (e) { if (e.name !== "AbortError") toast(e.message, true); }
+  busy(btn, false); other.disabled = false; $("tts-stop").classList.add("hidden"); refreshModels(); refreshStatus();
+}
+async function plainTTS(payload) {
+  const t0 = performance.now();
+  const res = await api("/v1/audio/speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const blob = await res.blob(), wall = (performance.now() - t0) / 1000, h = res.headers;
+  const fileId = h.get("X-File-Id"), ext = payload.response_format === "pcm" ? "raw" : payload.response_format;
+  ttsStats([["audio", h.get("X-Audio-Duration") + " s"], ["generation", h.get("X-Generation-Time") + " s"], ["real-time factor", h.get("X-RTF")], ["voice", h.get("X-Voice")], ["size", (blob.size / 1024).toFixed(0) + " KB"], ["round trip", wall.toFixed(2) + " s"]]);
+  $("tts-status").textContent = fileId || "";
+  setDownload(fileId ? "/v1/audio/files/" + fileId + "/download" : URL.createObjectURL(blob), (fileId || "speech") + "." + ext);
+  if (payload.response_format === "pcm") { $("tts-audio").removeAttribute("src"); drawWave(pcmToFloat(new Uint8Array(await blob.arrayBuffer()))); toast("Raw PCM generated; download to use it"); return; }
+  $("tts-audio").src = URL.createObjectURL(blob); $("tts-audio").play().catch(() => {});
+  drawWaveFromBlob(blob);
+}
+function pcmToFloat(bytes) { const n = bytes.length >> 1, out = new Float32Array(n), dv = new DataView(bytes.buffer, bytes.byteOffset, n * 2); for (let i = 0; i < n; i++) out[i] = dv.getInt16(i * 2, true) / 32768; return out; }
+async function streamTTS(payload) {
+  // Live playback needs raw samples, so the playground always streams WAV; the saved file is WAV too.
+  const body = Object.assign({}, payload, { response_format: "wav", stream: true });
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); await audioCtx.resume();
+  streamAbort = new AbortController(); streamNodes = []; $("tts-stop").classList.remove("hidden");
+  $("tts-audio").pause(); $("tts-audio").removeAttribute("src");
+  const t0 = performance.now();
+  const res = await api("/v1/audio/speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: streamAbort.signal });
+  const fileId = res.headers.get("X-File-Id"), reader = res.body.getReader(), all = [];
+  let pending = new Uint8Array(0), skip = 44, playAt = 0, ttfa = null, samples = 0;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    let buf = new Uint8Array(pending.length + value.length); buf.set(pending); buf.set(value, pending.length);
+    if (skip) { const n = Math.min(skip, buf.length); buf = buf.subarray(n); skip -= n; }
+    const usable = buf.length - (buf.length % 2); pending = buf.slice(usable); if (!usable) continue;
+    const f = pcmToFloat(buf.subarray(0, usable)); all.push(f); samples += f.length;
+    if (ttfa === null) ttfa = (performance.now() - t0) / 1000;
+    const ab = audioCtx.createBuffer(1, f.length, 24000); ab.copyToChannel(f, 0);
+    const node = audioCtx.createBufferSource(); node.buffer = ab; node.connect(audioCtx.destination);
+    playAt = Math.max(playAt, audioCtx.currentTime + 0.06); node.start(playAt); playAt += ab.duration; streamNodes.push(node);
+    $("tts-status").textContent = "streaming " + (samples / 24000).toFixed(1) + " s";
+    ttsStats([["time to first audio", ttfa.toFixed(2) + " s"], ["audio so far", (samples / 24000).toFixed(1) + " s"]]);
+  }
+  const total = (performance.now() - t0) / 1000, dur = samples / 24000, merged = new Float32Array(samples); let o = 0; for (const f of all) { merged.set(f, o); o += f.length; }
+  drawWave(merged);
+  ttsStats([["time to first audio", ttfa == null ? "-" : ttfa.toFixed(2) + " s"], ["audio", dur.toFixed(2) + " s"], ["generation", total.toFixed(2) + " s"], ["real-time factor", (total / Math.max(dur, .01)).toFixed(2)]]);
+  $("tts-status").textContent = fileId || "";
+  if (fileId) { $("tts-audio").src = "/v1/audio/files/" + fileId; setDownload("/v1/audio/files/" + fileId + "/download", fileId + ".wav"); }
+}
+function stopStream() { if (streamAbort) streamAbort.abort(); streamNodes.forEach(n => { try { n.stop(); } catch (e) {} }); streamNodes = []; $("tts-stop").classList.add("hidden"); }
+
+let wavePeaks = null;
+async function drawWaveFromBlob(blob) {
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); const buf = await audioCtx.decodeAudioData(await blob.arrayBuffer()); drawWave(buf.getChannelData(0)); } catch (e) { wavePeaks = null; paintWave(0); }
+}
+function drawWave(samples) {
+  const W = 600, step = Math.max(1, Math.floor(samples.length / W)); wavePeaks = new Float32Array(W);
+  for (let x = 0; x < W; x++) { let m = 0; for (let i = x * step, e = Math.min(samples.length, i + step); i < e; i++) { const v = Math.abs(samples[i]); if (v > m) m = v; } wavePeaks[x] = m; }
+  paintWave(0);
+}
+function paintWave(progress) {
+  const c = $("tts-wave"), g = c.getContext("2d"), W = c.width, H = c.height; g.clearRect(0, 0, W, H);
+  if (!wavePeaks) return;
+  let max = 0; for (const v of wavePeaks) if (v > max) max = v; max = max || 1;
+  const bw = W / wavePeaks.length;
+  for (let x = 0; x < wavePeaks.length; x++) { const h = Math.max(2, (wavePeaks[x] / max) * (H - 12)); g.fillStyle = x / wavePeaks.length < progress ? "#a78bfa" : "#3b4a75"; g.fillRect(x * bw, (H - h) / 2, Math.max(1, bw - 1), h); }
+}
+$("tts-audio").addEventListener("timeupdate", e => { const a = e.target; if (a.duration) paintWave(a.currentTime / a.duration); });
+$("tts-wave").addEventListener("click", e => { const a = $("tts-audio"); if (a.duration) { const r = e.target.getBoundingClientRect(); a.currentTime = a.duration * (e.clientX - r.left) / r.width; a.play().catch(() => {}); } });
+
+// ---------- code snippets ----------
+const origin = location.origin;
+const sh = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
+function setTtsCode(k) { state.ttsCode = k; renderTtsCode(); }
+function ttsSnippet(kind) {
+  const p = ttsPayload(), ext = p.response_format === "pcm" ? "raw" : p.response_format, extra = {};
+  if (p.style) extra.style = p.style;
+  if (kind === "curl") return "curl " + origin + "/v1/audio/speech \\\n  -H 'Content-Type: application/json' \\\n  -d " + sh(JSON.stringify(p, null, 2)) + " \\\n  --output speech." + ext;
+  if (kind === "python") return 'from openai import OpenAI\n\nclient = OpenAI(base_url="' + origin + '/v1", api_key="not-needed")\n\nwith client.audio.speech.with_streaming_response.create(\n    model=' + JSON.stringify(p.model) + ",\n    voice=" + JSON.stringify(p.voice) + ",\n    input=" + JSON.stringify(p.input) + ",\n    response_format=" + JSON.stringify(p.response_format) + ",\n    speed=" + p.speed + "," +
+    (p.style ? "\n    extra_body=" + JSON.stringify(extra) + "," : "") + '\n) as response:\n    response.stream_to_file("speech.' + ext + '")';
+  return 'import OpenAI from "openai";\nimport fs from "node:fs";\n\nconst client = new OpenAI({ baseURL: "' + origin + '/v1", apiKey: "not-needed" });\n\nconst speech = await client.audio.speech.create({\n  model: ' + JSON.stringify(p.model) + ",\n  voice: " + JSON.stringify(p.voice) + ",\n  input: " + JSON.stringify(p.input) + ",\n  response_format: " + JSON.stringify(p.response_format) + ",\n  speed: " + p.speed + "," +
+    (p.style ? "\n  // @ts-expect-error server extension\n  style: " + JSON.stringify(p.style) + "," : "") + '\n});\nfs.writeFileSync("speech.' + ext + '", Buffer.from(await speech.arrayBuffer()));';
+}
+function asrSnippet(kind) {
+  const model = $("asr-model").value, lang = $("asr-lang").value, mode = $("asr-mode").value, fmt = $("asr-format").value, task = $("asr-task").value;
+  const ep = task === "translate" ? "translations" : "transcriptions", useLang = lang && lang !== "auto" && task !== "translate", useMode = mode && mode !== "native" && task !== "translate";
+  if (kind === "curl") return "curl " + origin + "/v1/audio/" + ep + " \\\n  -F file=@audio.wav \\\n  -F model=" + model + " \\\n" + (useLang ? "  -F language=" + lang + " \\\n" : "") + (useMode ? "  -F mode=" + mode + " \\\n" : "") + "  -F response_format=" + fmt;
+  const structured = fmt === "json" || fmt === "verbose_json";
+  if (kind === "python") return 'from openai import OpenAI\n\nclient = OpenAI(base_url="' + origin + '/v1", api_key="not-needed")\n\nwith open("audio.wav", "rb") as audio:\n    result = client.audio.' + ep + ".create(\n        model=" + JSON.stringify(model) + ",\n        file=audio,\n" + (useLang ? "        language=" + JSON.stringify(lang) + ",\n" : "") + "        response_format=" + JSON.stringify(fmt) + ",\n" + (useMode ? "        extra_body=" + JSON.stringify({ mode }) + ",\n" : "") + "    )\nprint(" + (structured ? "result.text" : "result") + ")" + (fmt === "verbose_json" ? "\nfor seg in result.segments:\n    print(seg.start, seg.end, seg.text)" : "");
+  return 'import OpenAI from "openai";\nimport fs from "node:fs";\n\nconst client = new OpenAI({ baseURL: "' + origin + '/v1", apiKey: "not-needed" });\n\nconst result = await client.audio.' + ep + '.create({\n  model: ' + JSON.stringify(model) + ',\n  file: fs.createReadStream("audio.wav"),\n' + (useLang ? "  language: " + JSON.stringify(lang) + ",\n" : "") + "  response_format: " + JSON.stringify(fmt) + ",\n});\nconsole.log(" + (structured ? "result.text" : "result") + ");";
+}
+function mgmtSnippet(kind) {
+  if (kind === "curl") return "# list models with modality, backend and state\ncurl " + origin + "/v1/models\n\n# inspect, register, download, load\ncurl '" + origin + "/v1/hf/inspect?repo_id=mlx-community/whisper-large-v3-mlx'\ncurl -X POST " + origin + "/v1/models/register -H 'Content-Type: application/json' \\\n  -d '{\"repo_id\": \"mlx-community/whisper-large-v3-mlx\", \"modality\": \"asr\", \"id\": \"whisper-large-v3\"}'\ncurl -X POST " + origin + "/v1/models/whisper-large-v3/download      # -> {\"task_id\": ...}\ncurl " + origin + "/v1/models/tasks/TASK_ID                          # progress\ncurl -X POST " + origin + "/v1/models/whisper-large-v3/load\ncurl -X POST " + origin + "/v1/models/whisper-large-v3/unload\ncurl -X DELETE '" + origin + "/v1/models/whisper-large-v3?delete_files=false'\n\n# memory, loaded models, disk cache\ncurl " + origin + "/v1/system/status";
+  if (kind === "python") return 'import requests, time\n\nBASE = "' + origin + '"\n\nfor m in requests.get(f"{BASE}/v1/models").json()["data"]:\n    print(m["id"], m["modality"], m["backend"], m["status"])\n\nrequests.post(f"{BASE}/v1/models/register", json={\n    "repo_id": "mlx-community/whisper-large-v3-mlx", "modality": "asr", "id": "whisper-large-v3",\n})\ntask = requests.post(f"{BASE}/v1/models/whisper-large-v3/download").json()\nwhile (t := requests.get(f"{BASE}/v1/models/tasks/{task[\'task_id\']}").json())["status"] == "in_progress":\n    print(f"{t[\'progress\']:.0f}%"); time.sleep(1)\nrequests.post(f"{BASE}/v1/models/whisper-large-v3/load")\nprint(requests.get(f"{BASE}/v1/system/status").json()["loaded_models"])';
+  return 'const BASE = "' + origin + '";\n\nconst { data } = await (await fetch(`${BASE}/v1/models`)).json();\nconsole.table(data.map(({ id, modality, backend, status }) => ({ id, modality, backend, status })));\n\nawait fetch(`${BASE}/v1/models/register`, {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ repo_id: "mlx-community/whisper-large-v3-mlx", modality: "asr", id: "whisper-large-v3" }),\n});\nconst { task_id } = await (await fetch(`${BASE}/v1/models/whisper-large-v3/download`, { method: "POST" })).json();\nlet task;\ndo {\n  await new Promise((r) => setTimeout(r, 1000));\n  task = await (await fetch(`${BASE}/v1/models/tasks/${task_id}`)).json();\n} while (task.status === "in_progress");\nawait fetch(`${BASE}/v1/models/whisper-large-v3/load`, { method: "POST" });';
+}
+function renderTtsCode() {
+  $("tts-code").textContent = ttsSnippet(state.ttsCode);
+  document.querySelectorAll("[data-ttscode]").forEach(b => b.classList.toggle("primary", b.dataset.ttscode === state.ttsCode));
+}
+function setCodeLang(l) { state.codeLang = l; renderCode(); }
+function renderCode() {
+  document.querySelectorAll("[data-lang]").forEach(b => b.classList.toggle("primary", b.dataset.lang === state.codeLang));
+  $("code-tts").textContent = ttsSnippet(state.codeLang); $("code-asr").textContent = asrSnippet(state.codeLang); $("code-mgmt").textContent = mgmtSnippet(state.codeLang);
+}
+
+// ---------- ASR ----------
+let asrBlob = null, asrName = "audio.wav", recorder = null, recChunks = [], recTimer = null, recStart = 0;
+function setAsrAudio(blob, name) {
+  asrBlob = blob; asrName = name; const a = $("asr-audio"); a.src = URL.createObjectURL(blob); a.classList.remove("hidden");
+  $("asr-selected").textContent = name + " · " + (blob.size / 1024).toFixed(0) + " KB"; $("asr-go").disabled = false;
+}
+$("asr-file").addEventListener("change", e => { const f = e.target.files[0]; if (f) setAsrAudio(f, f.name); e.target.value = ""; });
+const drop = $("asr-drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) setAsrAudio(f, f.name); });
+async function toggleRecording() {
+  const btn = $("rec-btn");
+  if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  if (!micAvailable()) { toast(micBlockedReason(), true); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(stream); recChunks = [];
+    recorder.ondataavailable = e => { if (e.data.size) recChunks.push(e.data); };
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop()); clearInterval(recTimer); btn.classList.remove("on"); btn.innerHTML = "&#9679;"; $("rec-status").textContent = "Record from microphone";
+      const type = recorder.mimeType || "audio/webm", ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+      setAsrAudio(new Blob(recChunks, { type }), "recording-" + Date.now() + "." + ext);
     };
+    recorder.start(); recStart = Date.now(); btn.classList.add("on"); btn.innerHTML = "&#9632;"; $("rec-status").textContent = "Recording... click to stop";
+    recTimer = setInterval(() => { const s = Math.floor((Date.now() - recStart) / 1000); $("rec-timer").textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }, 250);
+  } catch (e) {
+    const why = e.name === "NotAllowedError" ? "permission was denied. Allow microphone access for this site in the browser settings."
+      : e.name === "NotFoundError" ? "no microphone was found on this device." : (e.message || e.name);
+    toast("Microphone unavailable: " + why, true);
+  }
+}
+// Browsers only expose the microphone on secure origins: https:// or http://localhost.
+function micAvailable() { return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder); }
+function micBlockedReason() {
+  if (!window.isSecureContext) return "Recording needs HTTPS when the dashboard is opened from another device. Restart the server with ./start.sh --https and open https://" + location.host + "/ (or upload a file instead).";
+  return "This browser does not support microphone recording. Upload an audio file instead.";
+}
+if (!micAvailable()) {
+  $("rec-btn").classList.add("blocked"); $("rec-btn").title = micBlockedReason();
+  $("rec-status").textContent = window.isSecureContext ? "Recording not supported in this browser" : "Recording needs HTTPS";
+  $("rec-timer").textContent = window.isSecureContext ? "upload a file instead" : "start with ./start.sh --https";
+}
+async function transcribeAudio() {
+  if (!asrBlob) return;
+  const btn = $("asr-go"), model = state.models.find(m => m.id === $("asr-model").value), task = $("asr-task").value, fmt = $("asr-format").value;
+  const fd = new FormData(); fd.append("file", asrBlob, asrName); fd.append("model", $("asr-model").value); fd.append("response_format", fmt);
+  if (task === "transcribe") { fd.append("language", $("asr-lang").value); fd.append("mode", $("asr-mode").value || "native"); fd.append("chunk_seconds", $("asr-chunk").value); }
+  busy(btn, true, model && model.status !== "loaded" ? "Loading model" : "Transcribing");
+  try {
+    const t0 = performance.now(), res = await api("/v1/audio/" + (task === "translate" ? "translations" : "transcriptions"), { method: "POST", body: fd });
+    const raw = await res.text(), wall = (performance.now() - t0) / 1000, fileId = res.headers.get("X-File-Id");
+    let rec = null;
+    if (fileId) { try { rec = await getJSON("/v1/audio/files/" + fileId); } catch (e) {} }
+    if (!rec) { try { const j = JSON.parse(raw); rec = { text: j.text || "", segments: j.segments || [], language: j.language, duration: j.duration }; } catch (e) { rec = { text: raw, segments: [] }; } }
+    lastAsr = { text: rec.text || "", segments: rec.segments || [], fileId, raw, language: rec.language, duration: rec.duration };
+    $("asr-output").textContent = lastAsr.text || "(no speech recognised)";
+    const lang = res.headers.get("X-Language") || rec.language, langName = state.langs && state.langs.models[$("asr-model").value] && state.langs.models[$("asr-model").value].languages[lang];
+    $("asr-badges").innerHTML = (lang ? '<span class="badge b-cached">' + esc(langName || lang) + " (" + esc(lang) + ")</span> " : "") + '<span class="badge b-plain">' + esc(res.headers.get("X-Script-Mode") || "native") + '</span> <span class="badge b-plain">' + esc(res.headers.get("X-Model") || "") + "</span>";
+    const gen = +res.headers.get("X-Generation-Time");
+    $("asr-stats").innerHTML = [["audio", rec.duration != null ? rec.duration.toFixed(1) + " s" : null], ["transcription", gen ? gen.toFixed(2) + " s" : null], ["real-time factor", gen && rec.duration ? (gen / rec.duration).toFixed(3) : null], ["segments", lastAsr.segments.length], ["round trip", wall.toFixed(2) + " s"]]
+      .filter(i => i[1] != null).map(i => '<div class="stat"><b>' + esc(i[1]) + "</b><span>" + esc(i[0]) + "</span></div>").join("");
+    $("asr-segs-wrap").classList.toggle("hidden", !lastAsr.segments.length);
+    $("asr-segs").innerHTML = lastAsr.segments.map(s => '<div class="seg" onclick="seekAsr(' + s.start + ')"><span class="t">' + fmtClock(s.start) + " → " + fmtClock(s.end) + "</span><span>" + esc(s.text) + "</span></div>").join("");
+    $("asr-raw-wrap").classList.remove("hidden"); $("asr-raw").textContent = raw.length > 6000 ? raw.slice(0, 6000) + "\n..." : raw;
+  } catch (e) { toast(e.message, true); }
+  busy(btn, false); refreshModels(); refreshStatus();
+}
+function seekAsr(t) { const a = $("asr-audio"); if (a.src) { a.currentTime = t; a.play().catch(() => {}); } }
+const srtTime = (s, sep) => { const ms = Math.round(s * 1000), p = (n, w) => String(n).padStart(w, "0"); return p(Math.floor(ms / 3600000), 2) + ":" + p(Math.floor(ms / 60000) % 60, 2) + ":" + p(Math.floor(ms / 1000) % 60, 2) + sep + p(ms % 1000, 3); };
+function exportTranscript(ext) {
+  if (!lastAsr.text) return toast("Nothing to export yet", true);
+  const base = lastAsr.fileId || "transcript", segs = lastAsr.segments;
+  if (ext === "txt") return download(base + ".txt", lastAsr.text);
+  if (ext === "json") return download(base + ".json", JSON.stringify({ language: lastAsr.language, duration: lastAsr.duration, text: lastAsr.text, segments: segs }, null, 2), "application/json");
+  if (!segs.length) return toast("No segments available for subtitles", true);
+  if (ext === "srt") return download(base + ".srt", segs.map((s, i) => (i + 1) + "\n" + srtTime(s.start, ",") + " --> " + srtTime(s.end, ",") + "\n" + s.text + "\n").join("\n"));
+  download(base + ".vtt", "WEBVTT\n\n" + segs.map(s => srtTime(s.start, ".") + " --> " + srtTime(s.end, ".") + "\n" + s.text + "\n").join("\n"), "text/vtt");
+}
 
-    function setPreset(lang) {
-      document.getElementById('tts-input').value = PRESETS[lang] || '';
-      if (lang === 'te') document.getElementById('tts-voice').value = 'Sravani';
-      if (lang === 'hi') document.getElementById('tts-voice').value = 'Kavya';
-      if (lang === 'ta') document.getElementById('tts-voice').value = 'Anitha';
-      if (lang === 'bn') document.getElementById('tts-voice').value = 'Ishita';
-      if (lang === 'sa') document.getElementById('tts-voice').value = 'Bharati';
-      updateCurl();
-    }
+// ---------- files ----------
+async function loadFiles() { try { state.files = await getJSON("/v1/audio/files"); renderFiles(); } catch (e) { toast(e.message, true); } }
+function renderFiles() {
+  const q = $("files-search").value.trim().toLowerCase(), type = $("files-type").value;
+  const list = state.files.filter(f => (!type || f.type === type) && (!q || [f.id, f.text, f.model, f.voice, f.filename, f.language].join(" ").toLowerCase().includes(q)));
+  $("files-count").textContent = list.length + " of " + state.files.length;
+  $("files-body").innerHTML = list.map(f => {
+    const id = esc(f.id), a = [];
+    if (f.audio_url && f.format !== "pcm") a.push('<button class="btn sm" onclick="playFile(\'' + esc(f.audio_url) + '\')">Play</button>');
+    if (f.type === "asr") a.push('<button class="btn sm" onclick="viewTranscript(\'' + id + '\')">View</button>');
+    a.push('<a class="btn sm" href="' + esc(f.download_url) + '" download>Download</a>');
+    a.push('<button class="btn sm danger" onclick="deleteFile(\'' + id + '\')">Delete</button>');
+    const size = f.size_bytes ? (f.size_bytes / 1024).toFixed(0) + " KB" : "";
+    return '<tr><td class="mono">' + id + '</td><td><span class="badge b-mod">' + esc(f.type) + "</span></td><td>" + esc(f.model || "-") + (f.voice ? '<div class="sub">' + esc(f.voice) + "</div>" : f.language ? '<div class="sub">' + esc(f.language) + "</div>" : "") + '</td><td class="small muted">' + esc(f.created_at || "") + "</td><td>" + (f.duration != null ? (+f.duration).toFixed(1) + " s" : "-") + '<div class="sub">' + size + '</div></td><td style="max-width:320px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(f.text || "") + '">' + esc(f.text || "") + '</div></td><td><div class="actions">' + a.join("") + "</div></td></tr>";
+  }).join("") || '<tr><td colspan="7" class="muted">No saved files yet.</td></tr>';
+}
+function playFile(url) { const a = $("files-audio"); a.classList.remove("hidden"); a.src = url; a.play().catch(() => {}); }
+async function viewTranscript(id) {
+  try {
+    const r = await getJSON("/v1/audio/files/" + id), hasAudio = (state.files.find(f => f.id === id) || {}).audio_url;
+    showModal('<h2 style="margin-bottom:.5rem">' + esc(id) + '</h2><div class="small muted" style="margin-bottom:.6rem">' + esc(r.filename || "") + " · " + esc(r.model || "") + " · " + esc(r.language || "") + " · " + (r.duration || 0) + " s</div>" +
+      (hasAudio ? '<audio id="modal-audio" controls src="' + esc(hasAudio) + '" style="margin-bottom:.6rem"></audio>' : "") +
+      '<div class="transcript" style="margin-bottom:.6rem">' + esc(r.text || "") + "</div>" +
+      ((r.segments || []).length > 1 ? '<div class="seglist" style="margin-bottom:.8rem">' + r.segments.map(s => '<div class="seg" onclick="var a=document.getElementById(\'modal-audio\');if(a){a.currentTime=' + s.start + ';a.play()}"><span class="t">' + fmtClock(s.start) + " → " + fmtClock(s.end) + "</span><span>" + esc(s.text) + "</span></div>").join("") + "</div>" : "") +
+      '<div class="actions">' + ["json", "txt", "srt", "vtt"].map(x => '<a class="btn sm" href="/v1/audio/files/' + esc(id) + "/download?format=" + x + '" download>.' + x + "</a>").join("") + '<span class="spacer"></span><button class="btn sm" onclick="closeModal()">Close</button></div>');
+  } catch (e) { toast(e.message, true); }
+}
+async function deleteFile(id) {
+  if (!confirm("Delete " + id + "? This cannot be undone.")) return;
+  try { await api("/v1/audio/files/" + id, { method: "DELETE" }); toast("Deleted"); loadFiles(); } catch (e) { toast(e.message, true); }
+}
 
-    function switchTab(tabId) {
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      document.getElementById(`tab-${tabId}`).classList.add('active');
-      event.target.classList.add('active');
-      if (tabId === 'files') loadSavedFiles();
-    }
-
-    function showToast(msg) {
-      const toast = document.getElementById('toast');
-      toast.innerText = msg;
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3000);
-    }
-
-    function updateCurl() {
-      const input = document.getElementById('tts-input').value.replace(/"/g, '\\"');
-      const voice = document.getElementById('tts-voice').value;
-      const model = document.getElementById('tts-model').value;
-      const format = document.getElementById('tts-format').value;
-      const curl = `curl -X POST http://localhost:8000/v1/audio/speech \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${model}", "input": "${input.slice(0, 50)}...", "voice": "${voice}", "response_format": "${format}"}' \\\n  --output speech.${format}`;
-      document.getElementById('tts-curl-box').innerText = curl;
-    }
-
-    document.getElementById('tts-input').addEventListener('input', updateCurl);
-    document.getElementById('tts-voice').addEventListener('change', updateCurl);
-    document.getElementById('tts-format').addEventListener('change', updateCurl);
-    document.getElementById('tts-model').addEventListener('change', updateCurl);
-
-    async function generateTTS(isStreaming) {
-      const text = document.getElementById('tts-input').value.trim();
-      if (!text) { alert('Please enter some text'); return; }
-
-      const voice = document.getElementById('tts-voice').value;
-      const style = document.getElementById('tts-style').value;
-      const model = document.getElementById('tts-model').value;
-      const format = document.getElementById('tts-format').value;
-      const speed = parseFloat(document.getElementById('tts-speed').value);
-
-      const btnGen = document.getElementById('btn-generate-tts');
-      const btnStream = document.getElementById('btn-stream-tts');
-      const loading = document.getElementById('tts-loading');
-      const audioPlayer = document.getElementById('tts-audio-player');
-      const statsBar = document.getElementById('tts-stats');
-      const btnDl = document.getElementById('btn-download-tts');
-      const btnCopy = document.getElementById('btn-copy-tts-url');
-
-      btnGen.disabled = true;
-      btnStream.disabled = true;
-      loading.style.display = 'inline-block';
-      loading.innerText = isStreaming ? 'Streaming...' : 'Generating...';
-
-      const t0 = performance.now();
-
-      try {
-        const payload = {
-          model: model,
-          input: text,
-          voice: voice,
-          style: style,
-          response_format: format,
-          speed: speed,
-          stream: isStreaming,
-          save: true
-        };
-
-        const response = await fetch('/v1/audio/speech', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.detail || 'Synthesis failed');
-        }
-
-        const fileId = response.headers.get('X-File-Id');
-        const fileUrl = response.headers.get('X-File-Url') || (fileId ? `/v1/audio/files/${fileId}` : null);
-        currentTTSFileUrl = fileUrl ? window.location.origin + fileUrl : null;
-
-        const blob = await response.blob();
-        const audioUrl = URL.createObjectURL(blob);
-        audioPlayer.src = audioUrl;
-        audioPlayer.play();
-
-        const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-        audioPlayer.onloadedmetadata = () => {
-          const duration = audioPlayer.duration.toFixed(2);
-          document.getElementById('stat-duration').innerText = `${duration}s`;
-          document.getElementById('stat-time').innerText = `${elapsed}s`;
-          document.getElementById('stat-rtf').innerText = (elapsed / Math.max(duration, 0.1)).toFixed(2);
-          statsBar.style.display = 'flex';
-        };
-
-        btnDl.href = audioUrl;
-        btnDl.download = `speech_${voice}.${format}`;
-        btnDl.style.display = 'inline-flex';
-        if (currentTTSFileUrl) btnCopy.style.display = 'inline-flex';
-
-        showToast(isStreaming ? 'Stream completed and ready!' : 'Speech generated successfully!');
-      } catch (e) {
-        alert('Error: ' + e.message);
-      } finally {
-        btnGen.disabled = false;
-        btnStream.disabled = false;
-        loading.style.display = 'none';
-      }
-    }
-
-    function copyTTSUrl() {
-      if (currentTTSFileUrl) {
-        navigator.clipboard.writeText(currentTTSFileUrl);
-        showToast('File URL copied to clipboard!');
-      }
-    }
-
-    // ASR Recording
-    async function toggleRecording() {
-      const recBtn = document.getElementById('rec-btn');
-      const recStatus = document.getElementById('rec-status');
-      const recBox = document.getElementById('record-box');
-
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop();
-        clearInterval(recordTimer);
-        recBtn.classList.remove('recording');
-        recBox.classList.remove('recording');
-        recBtn.innerText = '🎤';
-        recStatus.innerText = 'Recording saved. Ready to transcribe.';
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const chunks = [];
-        mediaRecorder = new MediaRecorder(stream);
-        mediaRecorder.ondataavailable = e => chunks.push(e.data);
-        mediaRecorder.onstop = () => {
-          currentAudioBlob = new Blob(chunks, { type: 'audio/webm' });
-          document.getElementById('selected-filename').innerText = `🎙️ Microphone Recording (${(currentAudioBlob.size / 1024).toFixed(1)} KB)`;
-          stream.getTracks().forEach(t => t.stop());
-        };
-
-        mediaRecorder.start();
-        recordStartTime = Date.now();
-        recBtn.classList.add('recording');
-        recBox.classList.add('recording');
-        recBtn.innerText = '⏹️';
-        recStatus.innerText = 'Recording... Click to Stop';
-
-        recordTimer = setInterval(() => {
-          const s = Math.floor((Date.now() - recordStartTime) / 1000);
-          const mins = String(Math.floor(s / 60)).padStart(2, '0');
-          const secs = String(s % 60).padStart(2, '0');
-          document.getElementById('rec-timer').innerText = `${mins}:${secs}`;
-        }, 500);
-
-      } catch (err) {
-        alert('Microphone access denied: ' + err.message);
-      }
-    }
-
-    function handleFileSelect(e) {
-      const file = e.target.files[0];
-      if (file) {
-        currentAudioBlob = file;
-        document.getElementById('selected-filename').innerText = `📁 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
-      }
-    }
-
-    async function transcribeAudio() {
-      if (!currentAudioBlob) {
-        alert('Please record your voice or select an audio file first.');
-        return;
-      }
-
-      const lang = document.getElementById('asr-lang').value;
-      const mode = document.getElementById('asr-mode').value;
-      const format = document.getElementById('asr-format').value;
-      const model = document.getElementById('asr-model').value;
-
-      const btn = document.getElementById('btn-transcribe');
-      const loading = document.getElementById('asr-loading');
-      const output = document.getElementById('asr-output');
-      const langBadge = document.getElementById('asr-lang-badge');
-      const segContainer = document.getElementById('segments-container');
-      const segList = document.getElementById('segments-list');
-      const btnSrt = document.getElementById('btn-dl-srt');
-
-      btn.disabled = true;
-      loading.style.display = 'inline-block';
-      output.innerText = 'Transcribing audio... Please wait.';
-      segContainer.style.display = 'none';
-      segList.innerHTML = '';
-
-      try {
-        const formData = new FormData();
-        const filename = currentAudioBlob.name || 'recording.webm';
-        formData.append('file', currentAudioBlob, filename);
-        formData.append('model', model);
-        if (lang !== 'auto') formData.append('language', lang);
-        formData.append('mode', mode);
-        formData.append('response_format', format);
-
-        const res = await fetch('/v1/audio/transcriptions', {
-          method: 'POST',
-          body: formData
-        });
-
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || 'Transcription failed');
-        }
-
-        if (format === 'text' || format === 'srt' || format === 'vtt') {
-          const text = await res.text();
-          output.innerText = text;
-          lastTranscriptData = { text: text, format: format };
-          if (format === 'srt') btnSrt.style.display = 'inline-block';
-        } else {
-          const json = await res.json();
-          lastTranscriptData = json;
-          output.innerText = json.text || JSON.stringify(json, null, 2);
-
-          if (json.language) {
-            langBadge.innerText = `Detected: ${json.language.toUpperCase()}`;
-            langBadge.style.display = 'inline-block';
-          }
-
-          if (json.segments && json.segments.length > 0) {
-            segContainer.style.display = 'block';
-            btnSrt.style.display = 'inline-block';
-            json.segments.forEach(seg => {
-              const div = document.createElement('div');
-              div.className = 'segment-item';
-              div.innerHTML = `<span class="segment-time">[${seg.start}s - ${seg.end}s]</span> <span>${seg.text}</span>`;
-              segList.appendChild(div);
-            });
-          }
-        }
-        showToast('Transcription finished!');
-      } catch (e) {
-        output.innerText = 'Error: ' + e.message;
-      } finally {
-        btn.disabled = false;
-        loading.style.display = 'none';
-      }
-    }
-
-    function copyTranscript() {
-      const text = document.getElementById('asr-output').innerText;
-      if (text) {
-        navigator.clipboard.writeText(text);
-        showToast('Transcribed text copied!');
-      }
-    }
-
-    function downloadTranscript(ext) {
-      if (!lastTranscriptData) return;
-      let content = document.getElementById('asr-output').innerText;
-      let mime = 'text/plain';
-
-      if (ext === 'json') {
-        content = JSON.stringify(lastTranscriptData, null, 2);
-        mime = 'application/json';
-      }
-
-      const blob = new Blob([content], { type: mime });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `transcript.${ext}`;
-      a.click();
-    }
-
-    async function loadSavedFiles() {
-      const tbody = document.getElementById('files-table-body');
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading saved files...</td></tr>';
-
-      try {
-        const res = await fetch('/v1/audio/files');
-        const files = await res.json();
-
-        if (files.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No saved files found yet.</td></tr>';
-          return;
-        }
-
-        tbody.innerHTML = '';
-        files.forEach(f => {
-          const isTts = f.type === 'tts';
-          const row = document.createElement('tr');
-          row.innerHTML = `
-            <td><strong>${f.id}</strong><br><small style="color:var(--text-muted);">${f.filename}</small></td>
-            <td><span class="badge ${isTts ? 'badge-primary' : 'badge-green'}">${isTts ? 'TTS Speech' : 'ASR Transcript'}</span></td>
-            <td>${isTts ? `${f.voice || '-'} (${f.style || 'Neutral'})` : `${f.language || 'Auto'} (${f.mode || 'native'})`}</td>
-            <td>${f.duration ? f.duration + 's' : '-'}</td>
-            <td>${f.created_at || '-'}</td>
-            <td>
-              <a href="/v1/audio/files/${f.id}" target="_blank" class="nav-btn" style="display:inline-flex; padding:0.2rem 0.5rem; margin-right:0.25rem;">▶️ Play</a>
-              <a href="/v1/audio/files/${f.id}/download" class="nav-btn" style="display:inline-flex; padding:0.2rem 0.5rem;">⬇️ Download</a>
-            </td>
-          `;
-          tbody.appendChild(row);
-        });
-      } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="6" style="color:red; text-align:center;">Failed to load files: ${e.message}</td></tr>`;
-      }
-    }
-
-    // Health check on load
-    fetch('/health').then(r => r.json()).then(data => {
-      document.getElementById('backend-status').innerText = data.status === 'ok' ? 'API Ready' : 'Degraded';
-    }).catch(() => {
-      document.getElementById('backend-status').innerText = 'Server Offline';
-    });
-  </script>
+// ---------- boot ----------
+(async function init() {
+  setPreset("Hindi");
+  await refreshModels(); await loadCatalogs(); loadPacks(); refreshStatus(); updateTtsInputs(); renderCode();
+  // resume progress display for downloads started elsewhere
+  try { for (const t of (await getJSON("/v1/models/tasks")).data) if (t.status === "in_progress" && t.type === "download") trackTask(t.model_id, t.task_id); } catch (e) {}
+  const tab = location.hash.slice(1); if (["models", "tts", "asr", "files", "code"].includes(tab)) switchTab(tab);
+  setInterval(refreshStatus, 5000);
+  setInterval(() => { if ($("tab-models").classList.contains("active") && !document.hidden) refreshModels(); }, 6000);
+})();
+</script>
 </body>
 </html>

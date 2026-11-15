@@ -1,19 +1,40 @@
-gradio>=6.0
-spaces
+# --- Core API ---------------------------------------------------------------
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+requests>=2.31.0
+python-dotenv
+psutil
+
+# --- PyTorch & Hugging Face ---------------------------------------------------
 torch
 torchaudio
-transformers>=5
+transformers>=4.44
+accelerate
 sentencepiece
+huggingface_hub
+
+# --- Audio --------------------------------------------------------------------
 soundfile
 snac
 numpy
+scipy
+indic-transliteration        # romanised ASR output (ISO 15919)
+kokoro>=0.9                  # hexgrad/Kokoro-82M TTS
+
+# --- Apple Silicon (MLX) ------------------------------------------------------
+mlx; sys_platform == "darwin" and platform_machine == "arm64"
+mlx-lm; sys_platform == "darwin" and platform_machine == "arm64"
+mlx-whisper; sys_platform == "darwin" and platform_machine == "arm64"
+
+# --- Later phases (not needed for TTS + ASR) ----------------------------------
+# mlx-vlm; sys_platform == "darwin" and platform_machine == "arm64"   # phase 2: VLM
+# sentence-transformers                                                # phase 3: embeddings + rerank
+# diffusers                                                            # phase 4: image generation
+# mflux; sys_platform == "darwin" and platform_machine == "arm64"     # phase 4: FLUX on MLX
+
+# --- Legacy Gradio demo (app.py) ----------------------------------------------
+gradio>=6.0
+spaces
 bitsandbytes
-accelerate
-python-dotenv
-huggingface_hub
-mlx-lm
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
-python-multipart>=0.0.9
-pydantic>=2.0.0
-requests>=2.31.0
