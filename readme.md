@@ -19,6 +19,39 @@ An OpenAI-compatible serving platform for Hugging Face models on Apple Silicon (
 
 Models load on first request. `--preload defaults` loads the default TTS and ASR models at startup; add `--preload indic-translate` for the translation model. `ffmpeg` is needed for M4A/WEBM uploads, MP3 streaming and pitch-preserving speed changes.
 
+## Running in the background
+
+`./start.sh` (or `./start.sh run`) runs in the foreground and stops with Ctrl+C. To keep the server running after you close the terminal, use the `start` command and manage it with the others:
+
+```bash
+./start.sh start --preload defaults     # start in the background (same options as a foreground run)
+./start.sh status                       # PID, uptime, memory, URL, health, loaded models
+./start.sh logs                         # last 100 log lines; -n 500 for more, -f to follow
+./start.sh restart                      # stop, then start again with the previous options
+./start.sh restart --port 9000          # restart with new options (these become the saved ones)
+./start.sh stop                         # graceful stop; SIGKILL after 30 s (STOP_TIMEOUT=60 to change)
+```
+
+| Command | What it does |
+| --- | --- |
+| `run` (default) | Bootstraps and runs in the foreground |
+| `start` | Bootstraps, then runs uvicorn detached and waits up to 60 s (`START_TIMEOUT`) for `/health`. If the server exits during startup, the last log lines are printed and the command fails |
+| `stop` | Sends SIGTERM so uvicorn shuts down cleanly, and sends SIGKILL after `STOP_TIMEOUT` seconds |
+| `restart [options]` | `stop` + `start`. With no options it reuses the ones from the last `start` |
+| `status` | Exit code `0` when running and healthy, `1` when the process is up but not responding yet, `3` when stopped, so it can be used in scripts |
+| `logs [-f] [-n N]` | Shows or follows `data/logs/server.log` |
+
+`-d` / `--daemon` is a shorthand for `start` (`./start.sh -d --port 9000`). `start` and `run` refuse to launch while a background server is already running.
+
+Files (all under the git-ignored `data/` directory):
+
+- `data/logs/server.log`: server output. It is rotated to `server.log.1` at startup once it passes 10 MB.
+- `data/run/server.pid`, `server.state`, `server.args`: PID, address and the options `restart` reuses.
+
+The Hugging Face token is never written to disk, so `restart` does not remember `--hf-token`. For gated models, export `HF_TOKEN` in the shell before `start`/`restart`, run `hf auth login` once (the server picks up the stored login), or set the token in the dashboard after each start.
+
+To start the server at login, add `cd /path/to/indic-speak && ./start.sh start --skip-install` to a login item or a launchd agent.
+
 ## Models
 
 | id | Repository | Type | Backend |
