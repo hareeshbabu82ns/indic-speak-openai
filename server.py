@@ -16,7 +16,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
 
@@ -26,10 +26,11 @@ from fastapi import FastAPI, File, Form, Query, Request, UploadFile  # noqa: E40
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse  # noqa: E402
-from pydantic import BaseModel, Field  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 import asr_engine  # noqa: E402
+import translation_engine  # noqa: E402
 import tts_engine  # noqa: E402
 from audio_utils import (ASR_SR, AUDIO_FORMATS, STREAMABLE_FORMATS, TTS_SR, Mp3StreamEncoder, decode_audio,  # noqa: E402
                          encode_audio, float_to_pcm16, format_srt, format_vtt, has_ffmpeg, streaming_wav_header)
@@ -57,6 +58,8 @@ FILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 manager = ModelManager(os.getenv("MODELS_CONFIG", str(BASE_DIR / "config" / "models.json")))
 manager.register_factory("tts", tts_engine.create_adapter)
 manager.register_factory("asr", asr_engine.create_adapter)
+manager.register_factory("translation", translation_engine.create_adapter)
+MAX_TRANSLATION_CHARS = int(os.getenv("MAX_TRANSLATION_CHARS", "100000"))
 
 
 # ----------------------------------------------------------------------------
@@ -64,7 +67,8 @@ manager.register_factory("asr", asr_engine.create_adapter)
 # ----------------------------------------------------------------------------
 async def _preload(names: List[str]) -> None:
     for name in names:
-        targets = [manager.defaults.get(m) for m in SUPPORTED_MODALITIES] if name == "defaults" else [name]
+        # "defaults" = default TTS + ASR; translation models are large and gated, so preload them by id.
+        targets = [manager.defaults.get(m) for m in ("tts", "asr")] if name == "defaults" else [name]
         for target in filter(None, targets):
             try:
                 await manager.ensure_loaded(target)
@@ -107,7 +111,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     expose_headers=["Content-Disposition", "X-File-Id", "X-File-Url", "X-Audio-Duration", "X-Generation-Time",
-                    "X-RTF", "X-Model", "X-Voice", "X-Sample-Rate", "X-Language", "X-Script-Mode"],
+                    "X-RTF", "X-Model", "X-Voice", "X-Sample-Rate", "X-Language", "X-Script-Mode",
+                    "X-Target-Language"],
 )
 
 
@@ -464,6 +469,283 @@ async def list_languages(model: Optional[str] = Query(None, description="ASR mod
 
 
 # ----------------------------------------------------------------------------
+# Text translation (OpenAI chat completions + structured /v1/translations)
+# ----------------------------------------------------------------------------
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    role: str
+    content: Optional[Union[str, List[Dict[str, Any]]]] = None
+
+
+class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")     # accept (and ignore) other OpenAI fields: stop, seed, user, ...
+    model: Optional[str] = Field(default=None, description="Translation model id (indic-translate, ...). Defaults to the default translation model.")
+    messages: List[ChatMessage] = Field(..., description="The last user message is translated; system messages are ignored (the model is single-turn).")
+    stream: Optional[bool] = False
+    stream_options: Optional[Dict[str, Any]] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    top_p: Optional[float] = Field(default=None, gt=0.0, le=1.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+    max_completion_tokens: Optional[int] = Field(default=None, ge=1)
+    n: Optional[int] = Field(default=1, ge=1, le=1)
+    # Extensions (pass with `extra_body` in the OpenAI SDK). With target_language set, the last user
+    # message is treated as plain source text and wrapped in the model's prompt format.
+    target_language: Optional[str] = Field(default=None, description="Target language code or name, e.g. hi, Telugu, tam_Taml")
+    task: Optional[str] = Field(default=None, description="translate (default) or transliterate")
+    script: Optional[str] = Field(default=None, description="native (default), roman or code-mixed")
+
+
+class TranslationRequest(BaseModel):
+    model: Optional[str] = Field(default=None, description="Translation model id; defaults to the default translation model")
+    input: Union[str, List[str]] = Field(..., description="Text, or a list of texts translated one by one")
+    target_language: str = Field(..., description="Target language code or name: hi, te, Tamil, mni_Beng, 'Hindi (Roman)', ...")
+    source_language: Optional[str] = Field(default=None, description="Informational only: the model detects the source language")
+    task: Optional[str] = Field(default="translate", description="translate or transliterate")
+    script: Optional[str] = Field(default="native", description="Output script: native, roman or code-mixed")
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="0 (greedy) is recommended")
+    top_p: Optional[float] = Field(default=None, gt=0.0, le=1.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1, description="Per input; sized from the input when omitted")
+    stream: Optional[bool] = Field(default=False, description="Server-sent events with text deltas")
+
+
+def _sse(obj: Any) -> bytes:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _message_text(msg: ChatMessage) -> str:
+    if isinstance(msg.content, str):
+        return msg.content
+    parts = []
+    for part in msg.content or []:
+        if part.get("type") in ("text", "input_text"):
+            parts.append(part.get("text") or "")
+        else:
+            raise ModelError("Translation models accept text content only.", param="messages")
+    return "".join(parts)
+
+
+def _resolve_translation_model(model: Optional[str]) -> dict:
+    spec = manager.resolve(model, None if model else "translation")
+    if spec["modality"] in ("llm", "vlm"):
+        raise ModelError(f"Chat with '{spec['modality']}' models arrives in phase 2; this server currently serves "
+                         "translation models on /v1/chat/completions.", status=501, code="modality_not_supported")
+    if spec["modality"] != "translation":
+        raise ModelError(f"Model '{spec['id']}' is a {spec['modality']} model and cannot serve translation requests.",
+                         param="model", code="model_modality_mismatch")
+    return spec
+
+
+def _sampling(spec: dict, temperature: Optional[float], top_p: Optional[float]) -> tuple:
+    d = spec.get("default_params", {})
+    return (float(temperature if temperature is not None else d.get("temperature", 0.0)),
+            float(top_p if top_p is not None else d.get("top_p", 1.0)))
+
+
+def _run_streaming(job_items: List[dict], spec: dict, temperature: float, top_p: float, max_tokens: Optional[int]):
+    """Start generation on the GPU worker; return (queue, cancel). Queue items:
+    ("delta", index, text) | ("done", index, result) | ("error", message) | None (end)."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    cancel = threading.Event()
+
+    def emit(item) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+
+    def job() -> None:
+        try:
+            adapter = manager.adapter(spec["id"])
+            for i, item in enumerate(job_items):
+                if cancel.is_set():
+                    break
+                ids, limit = translation_engine.prepare(adapter, item["prompt"], max_tokens, item.get("source"))
+                result = translation_engine.generate(adapter, ids, limit, temperature, top_p, cancel,
+                                                     on_delta=lambda d, i=i: emit(("delta", i, d)))
+                emit(("done", i, result))
+        except ModelError as e:
+            emit(("error", e.message))
+        except Exception as e:
+            logger.exception("Streaming translation failed")
+            emit(("error", f"{type(e).__name__}: {e}"))
+        finally:
+            emit(None)
+
+    manager.submit(job)
+    return queue, cancel
+
+
+def _run_blocking(job_items: List[dict], spec: dict, temperature: float, top_p: float, max_tokens: Optional[int]):
+    def job():
+        adapter = manager.adapter(spec["id"])
+        out = []
+        for item in job_items:
+            ids, limit = translation_engine.prepare(adapter, item["prompt"], max_tokens, item.get("source"))
+            out.append(translation_engine.generate(adapter, ids, limit, temperature, top_p))
+        return out
+    return manager.run(job)
+
+
+def _sum_usage(results: List[dict]) -> dict:
+    keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+    return {k: sum(r["usage"][k] for r in results) for k in keys}
+
+
+@app.post("/v1/chat/completions", tags=["Translation"])
+async def chat_completions(req: ChatCompletionRequest):
+    """OpenAI-compatible chat completions, served by translation models.
+
+    Send the source text as the last user message plus `target_language` (and optionally `task`,
+    `script`) via `extra_body`, or send a user message already in the model's format:
+    `Translate the following text into Hindi:\\n\\n<text>`."""
+    spec = _resolve_translation_model(req.model)
+    users = [m for m in req.messages if m.role == "user"]
+    if not users:
+        raise ModelError("messages must contain a user message with the text to translate.", param="messages")
+    content = _message_text(users[-1]).strip()
+    if not content:
+        raise ModelError("The user message is empty.", param="messages")
+    if len(content) > MAX_TRANSLATION_CHARS:
+        raise ModelError(f"Input is {len(content)} characters; the limit is {MAX_TRANSLATION_CHARS}.", param="messages")
+    if req.target_language:
+        target = translation_engine.target_spec(req.target_language, req.task or "translate", req.script)
+        item = {"prompt": translation_engine.build_prompt(content, target), "source": content}
+    else:
+        target = translation_engine.parse_prompt(content)
+        if target is None:
+            raise ModelError("Set `target_language` (e.g. extra_body={'target_language': 'hi'}) or write the user message as "
+                             "'Translate the following text into <Language>:\\n\\n<text>'. Translation models only follow that format.",
+                             param="target_language", code="missing_target_language")
+        item = {"prompt": content, "source": content.split("\n\n", 1)[-1]}
+    temperature, top_p = _sampling(spec, req.temperature, req.top_p)
+    max_tokens = req.max_completion_tokens or req.max_tokens
+
+    await manager.ensure_loaded(spec["id"])
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+    headers = {"X-Model": spec["id"], "X-Target-Language": target["code"]}
+
+    if req.stream:
+        include_usage = bool((req.stream_options or {}).get("include_usage"))
+        queue, cancel = _run_streaming([item], spec, temperature, top_p, max_tokens)
+
+        def chunk(delta: dict, finish: Optional[str] = None) -> dict:
+            return {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": spec["id"],
+                    "choices": [{"index": 0, "delta": delta, "logprobs": None, "finish_reason": finish}]}
+
+        async def body():
+            try:
+                yield _sse(chunk({"role": "assistant", "content": ""}))
+                while True:
+                    msg = await queue.get()
+                    if msg is None:
+                        break
+                    if msg[0] == "delta":
+                        yield _sse(chunk({"content": msg[2]}))
+                    elif msg[0] == "done":
+                        result = msg[2]
+                        yield _sse(chunk({}, "length" if result["finish_reason"] == "length" else "stop"))
+                        if include_usage:
+                            yield _sse({"id": completion_id, "object": "chat.completion.chunk", "created": created,
+                                        "model": spec["id"], "choices": [], "usage": result["usage"]})
+                    else:
+                        yield _sse({"error": {"message": msg[1], "type": "server_error", "code": "generation_failed"}})
+                yield b"data: [DONE]\n\n"
+            finally:
+                cancel.set()
+
+        return StreamingResponse(body(), media_type="text/event-stream",
+                                 headers={**headers, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    result = (await _run_blocking([item], spec, temperature, top_p, max_tokens))[0]
+    headers["X-Generation-Time"] = str(result["stats"]["total_s"])
+    return JSONResponse({
+        "id": completion_id, "object": "chat.completion", "created": created, "model": spec["id"],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": result["text"]},
+                     "logprobs": None, "finish_reason": "length" if result["finish_reason"] == "length" else "stop"}],
+        "usage": result["usage"],
+        "system_fingerprint": f"{spec['id']}-{spec.get('quantization', 'default')}",
+    }, headers=headers)
+
+
+@app.post("/v1/translations", tags=["Translation"])
+async def text_translations(req: TranslationRequest):
+    """Translate or transliterate text into a target language (structured extension endpoint).
+
+    Returns `{"object": "translation", "text", "data": [{"index", "text", "finish_reason"}], "usage"}`;
+    with `stream=true`, server-sent `translation.chunk` events carry `delta` text per `index`."""
+    texts = [req.input] if isinstance(req.input, str) else list(req.input)
+    if not texts or len(texts) > 256:
+        raise ModelError("input must be a string or a list of 1-256 strings.", param="input")
+    texts = [t.strip() for t in texts]
+    if any(not t for t in texts):
+        raise ModelError("input must not contain empty strings.", param="input")
+    total_chars = sum(len(t) for t in texts)
+    if total_chars > MAX_TRANSLATION_CHARS:
+        raise ModelError(f"input is {total_chars} characters; the limit is {MAX_TRANSLATION_CHARS}.", param="input")
+    target = translation_engine.target_spec(req.target_language, req.task or "translate", req.script)
+    spec = _resolve_translation_model(req.model)
+    temperature, top_p = _sampling(spec, req.temperature, req.top_p)
+    items = [{"prompt": translation_engine.build_prompt(t, target), "source": t} for t in texts]
+
+    await manager.ensure_loaded(spec["id"])
+    tr_id = f"tr_{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+    meta = {"id": tr_id, "created": created, "model": spec["id"], "task": target["task"],
+            "target_language": target["code"], "target_language_name": target["name"],
+            "prompt_language": target["prompt_name"], "script": target["script"],
+            "output_script": target["output_script"], "source_language": req.source_language}
+    headers = {"X-Model": spec["id"], "X-Target-Language": target["code"]}
+
+    if req.stream:
+        queue, cancel = _run_streaming(items, spec, temperature, top_p, req.max_tokens)
+
+        async def body():
+            results: List[dict] = []
+            try:
+                while True:
+                    msg = await queue.get()
+                    if msg is None:
+                        break
+                    if msg[0] == "delta":
+                        yield _sse({"object": "translation.chunk", "id": tr_id, "index": msg[1], "delta": msg[2]})
+                    elif msg[0] == "done":
+                        results.append(msg[2])
+                        yield _sse({"object": "translation.chunk", "id": tr_id, "index": msg[1], "delta": "",
+                                    "finish_reason": msg[2]["finish_reason"], "usage": msg[2]["usage"],
+                                    "stats": msg[2]["stats"]})
+                    else:
+                        yield _sse({"error": {"message": msg[1], "type": "server_error", "code": "generation_failed"}})
+                if results:
+                    yield _sse({"object": "translation.done", **meta, "usage": _sum_usage(results)})
+                yield b"data: [DONE]\n\n"
+            finally:
+                cancel.set()
+
+        return StreamingResponse(body(), media_type="text/event-stream",
+                                 headers={**headers, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    results = await _run_blocking(items, spec, temperature, top_p, req.max_tokens)
+    total_s = round(sum(r["stats"]["total_s"] for r in results), 3)
+    headers["X-Generation-Time"] = str(total_s)
+    return JSONResponse({
+        "object": "translation", **meta,
+        "text": results[0]["text"] if len(results) == 1 else None,
+        "data": [{"object": "translation.result", "index": i, "text": r["text"], "finish_reason": r["finish_reason"],
+                  "usage": r["usage"], "stats": r["stats"]} for i, r in enumerate(results)],
+        "usage": _sum_usage(results),
+        "stats": {"total_s": total_s, "engine": results[0]["stats"]["engine"]},
+    }, headers=headers)
+
+
+@app.get("/v1/translations/languages", tags=["Translation"])
+async def translation_languages():
+    """Target languages (code, name, prompt name, script), tasks and output scripts."""
+    cat = translation_engine.catalog()
+    models = [s["id"] for s in list(manager.models.values()) if s["modality"] == "translation"]
+    return {"default_model": manager.defaults.get("translation"), "models": models, **cat,
+            "count": len(cat["languages"])}
+
+
+# ----------------------------------------------------------------------------
 # Saved files
 # ----------------------------------------------------------------------------
 @app.get("/v1/audio/files", tags=["Files"])
@@ -690,6 +972,7 @@ async def health():
             "tts_mlx": "indic-speak-mlx" in adapters,
             "tts_torch": "indic-speak-torch" in adapters,
             "asr": any(manager.models[m]["modality"] == "asr" for m in loaded if m in manager.models),
+            "translation": any(manager.models[m]["modality"] == "translation" for m in loaded if m in manager.models),
         },
         "loaded_models": loaded,
         "defaults": dict(manager.defaults),

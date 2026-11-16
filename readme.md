@@ -17,7 +17,7 @@ An OpenAI-compatible serving platform for Hugging Face models on Apple Silicon (
 ./start.sh --port 9000 --host 127.0.0.1 --preload defaults --hf-token hf_xxx
 ```
 
-Models load on first request. `--preload defaults` loads the default TTS and ASR models at startup. `ffmpeg` is needed for M4A/WEBM uploads, MP3 streaming and pitch-preserving speed changes.
+Models load on first request. `--preload defaults` loads the default TTS and ASR models at startup; add `--preload indic-translate` for the translation model. `ffmpeg` is needed for M4A/WEBM uploads, MP3 streaming and pitch-preserving speed changes.
 
 ## Models
 
@@ -28,8 +28,37 @@ Models load on first request. `--preload defaults` loads the default TTS and ASR
 | `kokoro-82m` | `hexgrad/Kokoro-82M` | TTS | PyTorch |
 | `indic-transcribe` (default ASR) | `bodhan-ai/indic-transcribe-core` | ASR | PyTorch |
 | `whisper-large-v3` | `mlx-community/whisper-large-v3-mlx` | ASR | MLX |
+| `indic-translate` (default translation) | `bodhan-ai/indic-translate` | Translation | MLX |
+| `indic-translate-torch` | `bodhan-ai/indic-translate` | Translation | PyTorch |
 
-`tts-1`, `tts-1-hd` and `whisper-1` point at the default model of their type; change it with "Set default" in the dashboard. Any other Hugging Face TTS or ASR repository can be added from the Models tab or with `POST /v1/models/register`.
+`tts-1`, `tts-1-hd` and `whisper-1` point at the default model of their type; change it with "Set default" in the dashboard. Any other Hugging Face TTS, ASR or translation repository can be added from the Models tab or with `POST /v1/models/register`. Recommended extras: `indic-translate-mlx-8bit` (same weights quantized to 8-bit at load, about half the memory) and `gemma-4-e4b-it-4bit` (the ungated 5 GB base model, a lower-quality stand-in for trying the API).
+
+### Text translation (Indic Translate)
+
+[`bodhan-ai/indic-translate`](https://huggingface.co/bodhan-ai/indic-translate) is a Gemma 4 E4B fine-tune that translates between English and the 22 scheduled Indian languages in both directions, takes whole documents up to 32k tokens while keeping Markdown, LaTeX and code structure, and also does Romanized output, transliteration and code-mixed output. The repository is **gated**: accept the license at the link above with the Hugging Face account whose token the server uses (`HF_TOKEN` or the dashboard setting), then download about 16 GB. On Apple Silicon it runs on MLX straight from the original checkpoint (no conversion).
+
+The model follows one fixed prompt format and loses quality silently when it drifts. The server always builds that prompt itself (`Translate the following text into Hindi:\n\n<text>`, no system turn, thinking off, source language never named), so clients only send the text and a target.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+resp = client.chat.completions.create(
+    model="indic-translate",
+    messages=[{"role": "user", "content": "The committee approved the proposal after a long debate."}],
+    extra_body={"target_language": "hi"},          # also: task="transliterate", script="roman" | "code-mixed"
+)
+print(resp.choices[0].message.content)
+```
+
+- `target_language` takes a code (`hi`, `te`, `mni_Beng`, `sd_Arab`), a FLORES code (`tam_Taml`) or a name (`Telugu`, `Hindi (Roman)`). See `GET /v1/translations/languages`.
+- Instead of `target_language`, a user message already written as `Translate the following text into <Language>:\n\n<text>` is passed through unchanged. Any other message without a target is rejected with `missing_target_language`.
+- Only the last user message is translated; system messages are ignored, because the model is single-turn.
+- `stream=true` returns standard `chat.completion.chunk` SSE events (with `stream_options.include_usage`).
+- Greedy decoding (`temperature` 0) is the default. When `max_tokens` is omitted it is sized from the input (2.5 times the input tokens, up to 8192), since Indic scripts need 1.5 to 2 times the tokens of English.
+
+`POST /v1/translations` is a structured alternative: `{"input": "..." | [...], "target_language": "ta", "task": "translate", "script": "native"}` returns `{"object": "translation", "text", "data": [{"index", "text", "finish_reason"}], "usage"}`, and with `stream=true` it sends `translation.chunk` events with `delta` text per `index`.
 
 ## OpenAI SDK
 
@@ -55,6 +84,9 @@ with open("speech.mp3", "rb") as audio:
 | `POST` | `/v1/audio/transcriptions` | ASR: `json`, `text`, `verbose_json`, `srt`, `vtt`; `language`, `mode` |
 | `POST` | `/v1/audio/translations` | English (Whisper) or romanised (Indic-Transcribe) transcript |
 | `GET` | `/v1/audio/voices`, `/v1/audio/languages` | Voice and language catalogs per model |
+| `POST` | `/v1/chat/completions` | OpenAI chat completions served by translation models; `target_language`, `task`, `script`, `stream` |
+| `POST` | `/v1/translations` | Structured text translation / transliteration, single or batch, optional SSE streaming |
+| `GET` | `/v1/translations/languages` | Translation target languages, prompt names, scripts and tasks |
 | `GET` `DELETE` | `/v1/audio/files`, `/v1/audio/files/{id}`, `/v1/audio/files/{id}/download` | Saved audio and transcripts |
 | `GET` | `/v1/models`, `/v1/models/{id}` | Models with modality, backend, status, size |
 | `POST` | `/v1/models/register` | Add a Hugging Face model to the registry |
@@ -77,4 +109,4 @@ with open("speech.mp3", "rb") as audio:
 python test_api.py
 ```
 
-Runs against a live server; `--skip-lifecycle` skips the model download test.
+Runs against a live server; `--skip-lifecycle` skips the model download test. The translation group runs inference when a translation model is on disk (`--translation-model ID` picks one); `--only translation,system` runs selected groups.

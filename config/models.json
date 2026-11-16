@@ -2,8 +2,14 @@
   "version": 1,
   "defaults": {
     "tts": "indic-speak-mlx",
-    "asr": "indic-transcribe"
+    "asr": "indic-transcribe",
+    "translation": "indic-translate"
   },
+  "seeded_modalities": [
+    "asr",
+    "translation",
+    "tts"
+  ],
   "aliases": {
     "tts-1": "@tts",
     "tts-1-hd": "@tts",
@@ -120,6 +126,50 @@
       "context_length": null,
       "chat_template": null,
       "created": 1794666242
+    },
+    {
+      "id": "indic-translate",
+      "repo_id": "bodhan-ai/indic-translate",
+      "modality": "translation",
+      "backend": "mlx",
+      "quantization": "bf16",
+      "adapter": "indic-translate-mlx",
+      "ignore_patterns": [
+        "assets/*",
+        "benchmarks/*",
+        "*.png"
+      ],
+      "description": "Bodhan Indic Translate (Gemma 4 E4B) on MLX: English <-> 22 Indian languages, documents up to 32k tokens, Romanized, code-mixed and transliteration. Gated: accept the license on huggingface.co first.",
+      "default_params": {
+        "temperature": 0.0,
+        "top_p": 1.0
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794762193
+    },
+    {
+      "id": "indic-translate-torch",
+      "repo_id": "bodhan-ai/indic-translate",
+      "modality": "translation",
+      "backend": "transformers",
+      "quantization": "bf16",
+      "adapter": "indic-translate-torch",
+      "ignore_patterns": [
+        "assets/*",
+        "benchmarks/*",
+        "*.png"
+      ],
+      "description": "Bodhan Indic Translate reference checkpoint on PyTorch (MPS / CUDA / CPU). Gated.",
+      "default_params": {
+        "temperature": 0.0,
+        "top_p": 1.0
+      },
+      "aliases": [],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1794762193
     }
   ]
 }

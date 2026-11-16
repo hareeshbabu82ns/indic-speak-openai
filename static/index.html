@@ -104,7 +104,7 @@ audio { width: 100%; height: 36px; margin-top: .5rem; }
 <header>
   <div class="bar">
     <div class="logo">AI</div>
-    <div class="brand"><h1>AI Serving Platform</h1><p>OpenAI-compatible speech API &middot; Phase 1: TTS + ASR</p></div>
+    <div class="brand"><h1>AI Serving Platform</h1><p>OpenAI-compatible API &middot; TTS, ASR and translation</p></div>
     <div class="spacer"></div>
     <span class="pill" id="pill-device"><span class="dot" id="dot-health"></span><span id="txt-device">connecting</span></span>
     <span class="pill" id="pill-mem">memory</span>
@@ -115,6 +115,7 @@ audio { width: 100%; height: 36px; margin-top: .5rem; }
     <button data-tab="models" class="active">Models</button>
     <button data-tab="tts">Text to Speech</button>
     <button data-tab="asr">Speech to Text</button>
+    <button data-tab="translate">Translate</button>
     <button data-tab="files">Saved Files</button>
     <button data-tab="code">API Code</button>
   </nav>
@@ -150,6 +151,7 @@ audio { width: 100%; height: 36px; margin-top: .5rem; }
         <div><label for="hf-id">Model alias (id)</label><input type="text" id="hf-id" placeholder="used as `model` in API calls"></div>
         <div><label for="hf-modality">Modality</label><select id="hf-modality">
           <option value="tts">TTS (text to speech)</option><option value="asr">ASR (speech to text)</option>
+          <option value="translation">Translation (text to text)</option>
           <option value="llm">LLM (phase 2)</option><option value="vlm">VLM (phase 2)</option>
           <option value="embedding">Embedding (phase 3)</option><option value="rerank">Rerank (phase 3)</option><option value="image_gen">Image gen (phase 4)</option>
         </select></div>
@@ -273,6 +275,50 @@ audio { width: 100%; height: 36px; margin-top: .5rem; }
   </div>
 </section>
 
+<!-- ===================== TRANSLATE ===================== -->
+<section class="tab" id="tab-translate">
+  <div class="grid g2">
+    <div class="card" style="margin:0">
+      <h2>Translate <small>POST /v1/chat/completions &middot; /v1/translations</small></h2>
+      <div class="row field">
+        <div><label for="tr-model">Model</label><select id="tr-model"></select></div>
+        <div><label for="tr-task">Task</label><select id="tr-task"><option value="translate">Translate</option><option value="transliterate">Transliterate (same language)</option></select></div>
+      </div>
+      <div class="row field">
+        <div><label for="tr-target">Target language</label><select id="tr-target"></select></div>
+        <div><label for="tr-script">Output script</label><select id="tr-script"><option value="native">Native script</option><option value="roman">Romanized (Latin letters)</option><option value="code-mixed">Code-mixed (with English)</option></select></div>
+      </div>
+      <div class="chips" id="tr-presets"></div>
+      <div class="field"><textarea id="tr-text" placeholder="Paste a sentence or a whole Markdown document. The source language is detected automatically."></textarea><div class="sub"><span id="tr-chars">0</span> characters &middot; documents up to ~32k tokens keep their headings, lists and code blocks</div></div>
+      <div class="row field">
+        <div><label for="tr-temp">Temperature <span id="tr-temp-val">0.0</span></label><input type="range" id="tr-temp" min="0" max="1" step="0.05" value="0"></div>
+        <div><label for="tr-max">Max output tokens</label><input type="number" id="tr-max" min="1" placeholder="auto (2.5x input)"></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="tr-go" onclick="runTranslate()">Translate</button>
+        <button class="btn" id="tr-swap" onclick="swapTranslation()" title="Use the output as the new input">Use output as input</button>
+        <button class="btn hidden" id="tr-stop" onclick="stopTranslate()">Stop</button>
+      </div>
+      <p class="sub" id="tr-hint"></p>
+    </div>
+    <div>
+      <div class="card">
+        <h2>Output <small id="tr-status"></small></h2>
+        <div class="transcript" id="tr-output" dir="auto"><span class="faint">The translation streams in here.</span></div>
+        <div class="stats" id="tr-stats"></div>
+        <div class="actions"><button class="btn sm" onclick="copyText($('tr-output').dataset.text || '')">Copy</button>
+          <button class="btn sm" onclick="download('translation.txt', $('tr-output').dataset.text || '')">.txt</button></div>
+      </div>
+      <div class="card" style="margin:0">
+        <h2>Request <span class="spacer"></span>
+          <button class="btn sm" data-trcode="python" onclick="setTrCode('python')">Python</button>
+          <button class="btn sm" data-trcode="curl" onclick="setTrCode('curl')">cURL</button></h2>
+        <div class="codebox"><button class="btn sm copy" onclick="copyText(document.getElementById('tr-code').textContent)">Copy</button><pre id="tr-code"></pre></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ===================== FILES ===================== -->
 <section class="tab" id="tab-files">
   <div class="card">
@@ -301,6 +347,7 @@ audio { width: 100%; height: 36px; margin-top: .5rem; }
     </div>
     <label>Text to speech</label><div class="codebox field"><button class="btn sm copy" onclick="copyText(document.getElementById('code-tts').textContent)">Copy</button><pre id="code-tts"></pre></div>
     <label>Speech to text</label><div class="codebox field"><button class="btn sm copy" onclick="copyText(document.getElementById('code-asr').textContent)">Copy</button><pre id="code-asr"></pre></div>
+    <label>Text translation</label><div class="codebox field"><button class="btn sm copy" onclick="copyText(document.getElementById('code-tr').textContent)">Copy</button><pre id="code-tr"></pre></div>
     <label>Model management</label><div class="codebox"><button class="btn sm copy" onclick="copyText(document.getElementById('code-mgmt').textContent)">Copy</button><pre id="code-mgmt"></pre></div>
   </div>
 </section>
@@ -313,7 +360,7 @@ audio { width: 100%; height: 36px; margin-top: .5rem; }
 "use strict";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const state = { models: [], status: null, voices: null, langs: null, files: [], tasks: {}, ttsCode: "curl", codeLang: "python" };
+const state = { models: [], status: null, voices: null, langs: null, trLangs: null, files: [], tasks: {}, ttsCode: "curl", trCode: "python", codeLang: "python" };
 let lastAsr = { text: "", segments: [], fileId: null, raw: "" };
 
 const PRESETS = {
@@ -466,7 +513,8 @@ async function doDelete(id) {
   await refreshModels(); loadPacks(); refreshStatus(); loadCatalogs();
 }
 function openPlayground(id, modality) {
-  const sel = $(modality === "tts" ? "tts-model" : "asr-model"); sel.value = id; sel.dispatchEvent(new Event("change")); switchTab(modality);
+  const sel = $({ tts: "tts-model", asr: "asr-model", translation: "tr-model" }[modality]); sel.value = id; sel.dispatchEvent(new Event("change"));
+  switchTab(modality === "translation" ? "translate" : modality);
 }
 
 // ---------- recommended + add from HF ----------
@@ -515,11 +563,11 @@ async function registerModel(andDownload) {
 
 // ---------- catalogs / selects ----------
 async function loadCatalogs() {
-  try { [state.voices, state.langs] = await Promise.all([getJSON("/v1/audio/voices"), getJSON("/v1/audio/languages")]); } catch (e) { return; }
-  fillVoices(); fillLanguages();
+  try { [state.voices, state.langs, state.trLangs] = await Promise.all([getJSON("/v1/audio/voices"), getJSON("/v1/audio/languages"), getJSON("/v1/translations/languages")]); } catch (e) { return; }
+  fillVoices(); fillLanguages(); fillTrLanguages();
 }
 function fillModelSelects() {
-  for (const [selId, modality] of [["tts-model", "tts"], ["asr-model", "asr"]]) {
+  for (const [selId, modality] of [["tts-model", "tts"], ["asr-model", "asr"], ["tr-model", "translation"]]) {
     const sel = $(selId), prev = sel.value, list = state.models.filter(m => m.modality === modality && m.supported);
     sel.innerHTML = list.map(m => '<option value="' + esc(m.id) + '">' + esc(m.id) + " · " + esc(m.status) + (m.is_default ? " · default" : "") + "</option>").join("");
     const def = list.find(m => m.is_default);
@@ -531,6 +579,8 @@ function updateHints() {
   const t = state.models.find(m => m.id === $("tts-model").value), a = state.models.find(m => m.id === $("asr-model").value);
   const hint = m => !m ? "No model registered for this modality. Add one in the Models tab." : m.status === "loaded" ? "" : m.status === "cached" ? "Model is on disk; the first request loads it into memory." : m.status === "downloading" ? "Model is downloading; requests wait for it." : "Model is not downloaded; the first request downloads it.";
   $("tts-hint").textContent = hint(t); $("asr-hint").textContent = hint(a);
+  const tr = state.models.find(m => m.id === $("tr-model").value);
+  $("tr-hint").textContent = hint(tr) + (tr && tr.repo_id === "bodhan-ai/indic-translate" && tr.status === "registered" ? " Gated repository: accept the license on huggingface.co/bodhan-ai/indic-translate and set an HF token first (about 16 GB)." : "");
 }
 function fillVoices() {
   const cat = state.voices && state.voices.models[$("tts-model").value]; if (!cat) return;
@@ -553,6 +603,13 @@ function fillLanguages() {
   sel.value = cat.languages[prev] ? prev : "auto";
   $("asr-mode").innerHTML = cat.modes.map(m => "<option>" + esc(m) + "</option>").join(""); $("asr-mode").disabled = cat.modes.length < 2;
 }
+function fillTrLanguages() {
+  if (!state.trLangs) return;
+  const sel = $("tr-target"), prev = sel.value || "hi";
+  sel.innerHTML = Object.entries(state.trLangs.languages).map(([c, l]) => '<option value="' + esc(c) + '">' + esc(l.prompt_name) + " (" + esc(c) + ")</option>").join("");
+  sel.value = state.trLangs.languages[prev] ? prev : "hi"; renderTrCode();
+}
+$("tr-model").addEventListener("change", updateHints);
 $("tts-model").addEventListener("change", () => { fillVoices(); updateHints(); });
 $("asr-model").addEventListener("change", () => { fillLanguages(); updateHints(); });
 
@@ -647,8 +704,84 @@ function paintWave(progress) {
 $("tts-audio").addEventListener("timeupdate", e => { const a = e.target; if (a.duration) paintWave(a.currentTime / a.duration); });
 $("tts-wave").addEventListener("click", e => { const a = $("tts-audio"); if (a.duration) { const r = e.target.getBoundingClientRect(); a.currentTime = a.duration * (e.clientX - r.left) / r.width; a.play().catch(() => {}); } });
 
+// ---------- Translate ----------
+const TR_PRESETS = {
+  "English sentence": { text: "The committee approved the proposal after a long debate.", target: "hi" },
+  "Hindi → English": { text: "हाल के वर्षों में, रुपये की विनिमय दर पर भिन्न-भिन्न दृष्टिकोण सामने आए हैं।", target: "en" },
+  "Telugu → English": { text: "నమస్కారం! ఈ రోజు మనం ఒక కొత్త విషయం నేర్చుకుందాం. చదువు మనిషికి నిజమైన సంపద.", target: "en" },
+  "Code-mixed": { text: "Yaar tomorrow ka meeting cancel ho gaya hai, boss ko inform kar dena.", target: "en" },
+  "Markdown doc": { text: "# Release notes\n\n## What's new\n\n- Faster downloads with **resume** support.\n- A new `--preload` flag.\n\nSee the [documentation](https://example.com/docs) for details.", target: "ta" },
+};
+$("tr-presets").innerHTML = Object.keys(TR_PRESETS).map(k => '<button class="chip" onclick="setTrPreset(\'' + esc(k) + '\')">' + esc(k) + "</button>").join("");
+function setTrPreset(k) { const p = TR_PRESETS[k]; $("tr-text").value = p.text; $("tr-target").value = p.target; $("tr-script").value = "native"; $("tr-task").value = "translate"; updateTrInputs(); }
+function updateTrInputs() { $("tr-chars").textContent = $("tr-text").value.length; $("tr-temp-val").textContent = (+$("tr-temp").value).toFixed(2); renderTrCode(); }
+["tr-text", "tr-temp", "tr-max"].forEach(id => $(id).addEventListener("input", updateTrInputs));
+["tr-target", "tr-script", "tr-task", "tr-model"].forEach(id => $(id).addEventListener("change", renderTrCode));
+function trPayload() {
+  const p = { model: $("tr-model").value, input: $("tr-text").value, target_language: $("tr-target").value };
+  if ($("tr-task").value !== "translate") p.task = $("tr-task").value;
+  if ($("tr-script").value !== "native") p.script = $("tr-script").value;
+  if (+$("tr-temp").value > 0) p.temperature = +$("tr-temp").value;
+  if (+$("tr-max").value > 0) p.max_tokens = +$("tr-max").value;
+  return p;
+}
+function trStats(items) { $("tr-stats").innerHTML = items.filter(i => i[1] != null).map(i => '<div class="stat"><b>' + esc(i[1]) + "</b><span>" + esc(i[0]) + "</span></div>").join(""); }
+function setTrOutput(text) { const o = $("tr-output"); o.dataset.text = text; o.textContent = text; }
+let trAbort = null;
+async function runTranslate() {
+  const p = trPayload(); if (!p.input.trim()) return toast("Enter some text first", true);
+  if (p.target_language === "en" && p.script) return toast("English output only has the native script", true);
+  const btn = $("tr-go"), model = state.models.find(m => m.id === p.model);
+  busy(btn, true, model && model.status !== "loaded" ? (model.status === "registered" ? "Downloading model" : "Loading model") : "Translating");
+  $("tr-stop").classList.remove("hidden"); setTrOutput(""); trStats([]); $("tr-status").textContent = "";
+  trAbort = new AbortController();
+  const t0 = performance.now(); let ttft = null, text = "", usage = null, finish = null;
+  try {
+    const res = await api("/v1/translations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, p, { stream: true })), signal: trAbort.signal });
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let cut; while ((cut = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, cut).trim(); buf = buf.slice(cut + 2);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim(); if (data === "[DONE]") continue;
+        const ev = JSON.parse(data);
+        if (ev.error) throw new Error(ev.error.message);
+        if (ev.delta) { if (ttft === null) ttft = (performance.now() - t0) / 1000; text += ev.delta; setTrOutput(text); }
+        if (ev.finish_reason) { finish = ev.finish_reason; usage = ev.usage; }
+        trStats([["first token", ttft == null ? null : ttft.toFixed(2) + " s"], ["elapsed", ((performance.now() - t0) / 1000).toFixed(1) + " s"]]);
+      }
+    }
+    const total = (performance.now() - t0) / 1000;
+    trStats([["first token", ttft == null ? "-" : ttft.toFixed(2) + " s"], ["total", total.toFixed(2) + " s"],
+      ["tokens in / out", usage ? usage.prompt_tokens + " / " + usage.completion_tokens : null],
+      ["tokens / s", usage && ttft != null ? (usage.completion_tokens / Math.max(total - ttft, .01)).toFixed(1) : null], ["finish", finish]]);
+    $("tr-status").textContent = p.target_language + (p.script ? " · " + p.script : "");
+    if (finish === "length") toast("Output hit max tokens; raise the limit for the full translation", true);
+  } catch (e) { if (e.name !== "AbortError") toast(e.message, true); }
+  busy(btn, false); $("tr-stop").classList.add("hidden"); refreshModels(); refreshStatus();
+}
+function stopTranslate() { if (trAbort) trAbort.abort(); }
+function swapTranslation() { const t = $("tr-output").dataset.text; if (t) { $("tr-text").value = t; updateTrInputs(); } }
+
 // ---------- code snippets ----------
 const origin = location.origin;
+function setTrCode(k) { state.trCode = k; renderTrCode(); }
+function trSnippet(kind) {
+  const p = trPayload(), extra = { target_language: p.target_language };
+  if (p.task) extra.task = p.task; if (p.script) extra.script = p.script;
+  if (kind === "curl") return "# structured endpoint\ncurl " + origin + "/v1/translations \\\n  -H 'Content-Type: application/json' \\\n  -d " + sh(JSON.stringify(p, null, 2)) +
+    "\n\n# OpenAI chat completions\ncurl " + origin + "/v1/chat/completions \\\n  -H 'Content-Type: application/json' \\\n  -d " + sh(JSON.stringify(Object.assign({ model: p.model, messages: [{ role: "user", content: p.input }] }, extra), null, 2));
+  if (kind === "python") return 'from openai import OpenAI\n\nclient = OpenAI(base_url="' + origin + '/v1", api_key="not-needed")\n\nresp = client.chat.completions.create(\n    model=' + JSON.stringify(p.model) + ",\n    messages=[{\"role\": \"user\", \"content\": " + JSON.stringify(p.input) + "}],\n" +
+    (p.temperature ? "    temperature=" + p.temperature + ",\n" : "") + (p.max_tokens ? "    max_tokens=" + p.max_tokens + ",\n" : "") + "    extra_body=" + JSON.stringify(extra) + ",\n)\nprint(resp.choices[0].message.content)";
+  return 'import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: "' + origin + '/v1", apiKey: "not-needed" });\n\nconst stream = await client.chat.completions.create({\n  model: ' + JSON.stringify(p.model) + ',\n  messages: [{ role: "user", content: ' + JSON.stringify(p.input) + " }],\n  stream: true,\n  // @ts-expect-error server extensions\n" +
+    Object.entries(extra).map(([k, v]) => "  " + k + ": " + JSON.stringify(v) + ",\n").join("") + "});\nfor await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? \"\");";
+}
+function renderTrCode() {
+  $("tr-code").textContent = trSnippet(state.trCode);
+  document.querySelectorAll("[data-trcode]").forEach(b => b.classList.toggle("primary", b.dataset.trcode === state.trCode));
+}
 const sh = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
 function setTtsCode(k) { state.ttsCode = k; renderTtsCode(); }
 function ttsSnippet(kind) {
@@ -681,6 +814,7 @@ function setCodeLang(l) { state.codeLang = l; renderCode(); }
 function renderCode() {
   document.querySelectorAll("[data-lang]").forEach(b => b.classList.toggle("primary", b.dataset.lang === state.codeLang));
   $("code-tts").textContent = ttsSnippet(state.codeLang); $("code-asr").textContent = asrSnippet(state.codeLang); $("code-mgmt").textContent = mgmtSnippet(state.codeLang);
+  $("code-tr").textContent = trSnippet(state.codeLang);
 }
 
 // ---------- ASR ----------
@@ -798,10 +932,10 @@ async function deleteFile(id) {
 // ---------- boot ----------
 (async function init() {
   setPreset("Hindi");
-  await refreshModels(); await loadCatalogs(); loadPacks(); refreshStatus(); updateTtsInputs(); renderCode();
+  await refreshModels(); await loadCatalogs(); loadPacks(); refreshStatus(); updateTtsInputs(); setTrPreset("English sentence"); renderCode();
   // resume progress display for downloads started elsewhere
   try { for (const t of (await getJSON("/v1/models/tasks")).data) if (t.status === "in_progress" && t.type === "download") trackTask(t.model_id, t.task_id); } catch (e) {}
-  const tab = location.hash.slice(1); if (["models", "tts", "asr", "files", "code"].includes(tab)) switchTab(tab);
+  const tab = location.hash.slice(1); if (["models", "tts", "asr", "translate", "files", "code"].includes(tab)) switchTab(tab);
   setInterval(refreshStatus, 5000);
   setInterval(() => { if ($("tab-models").classList.contains("active") && !document.hidden) refreshModels(); }, 6000);
 })();

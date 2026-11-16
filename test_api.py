@@ -1,4 +1,4 @@
-"""End-to-end verification suite for the AI Serving Platform (phase 1: TTS + ASR).
+"""End-to-end verification suite for the AI Serving Platform (TTS, ASR and text translation).
 
 Run against a live server:
 
@@ -87,7 +87,7 @@ def test_system():
         assert required in by_id, f"{required} missing from /v1/models"
     assert "indic-speak-mlx" in by_id or platform.machine() != "arm64"
     for m in models["data"]:
-        assert m["object"] == "model" and m["modality"] in ("tts", "asr", "llm", "vlm", "embedding", "rerank", "image_gen")
+        assert m["object"] == "model" and m["modality"] in ("tts", "asr", "translation", "llm", "vlm", "embedding", "rerank", "image_gen")
         assert {"backend", "repo_id", "status", "size_mb"} <= set(m), f"extended fields missing on {m['id']}"
     assert by_id["tts-1"]["alias_of"] == health["defaults"]["tts"]
     assert by_id["whisper-1"]["alias_of"] == health["defaults"]["asr"]
@@ -302,8 +302,91 @@ def test_asr():
     print("OK")
 
 
+def _sse_events(res: requests.Response):
+    import json
+    for line in res.iter_lines(decode_unicode=True):
+        if line and line.startswith("data:"):
+            data = line[5:].strip()
+            yield None if data == "[DONE]" else json.loads(data)
+
+
+def test_translation():
+    step("7. Text translation (/v1/chat/completions, /v1/translations)")
+    langs = get("/v1/translations/languages").json()
+    assert {"en", "hi", "te", "ta", "sat", "mni", "mni_Beng", "ks", "sd_Arab"} <= set(langs["languages"])
+    assert langs["languages"]["mni_Beng"]["prompt_name"] == "Manipuri (Bengali script)"
+    assert langs["tasks"] == ["translate", "transliterate"] and "roman" in langs["scripts"]
+    print(f"languages: {langs['count']}; translation models: {langs['models']} (default {langs['default_model']})")
+
+    assert_error(post("/v1/translations", json={"input": "hi", "target_language": "klingon"}), 400)
+    assert_error(post("/v1/translations", json={"input": "hi", "target_language": "en", "script": "roman"}), 400)
+    assert_error(post("/v1/translations", json={"input": "hi", "target_language": "hi", "task": "transliterate",
+                                                "script": "code-mixed"}), 400)
+    assert_error(post("/v1/translations", json={"input": "hi", "target_language": "hi", "model": "kokoro-82m"}), 400)
+
+    model = shared.get("translation_model")
+    if not model:
+        cached = [m for m in get("/v1/models", params={"modality": "translation", "include_aliases": "false"}).json()["data"]
+                  if m["status"] in ("cached", "loaded")]
+        model = next((m["id"] for m in cached if m["is_default"]), cached[0]["id"] if cached else None)
+    if not model:
+        print("No translation model on disk; skipping inference (download one, or pass --translation-model).")
+        print("OK")
+        return
+    assert_error(post("/v1/chat/completions", json={"model": model, "messages": [{"role": "user", "content": "hello"}]}), 400)
+
+    english = "The committee approved the proposal after a long debate."
+    res = post("/v1/chat/completions", json={"model": model, "target_language": "hi",
+                                             "messages": [{"role": "system", "content": "ignored"},
+                                                          {"role": "user", "content": english}]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["object"] == "chat.completion" and body["choices"][0]["message"]["role"] == "assistant"
+    hindi = body["choices"][0]["message"]["content"]
+    assert any("ऀ" <= c <= "ॿ" for c in hindi), f"expected Devanagari output, got {hindi!r}"
+    assert body["usage"]["completion_tokens"] > 0 and res.headers["X-Target-Language"] == "hi"
+    print(f"chat.completions en->hi: {hindi}")
+
+    # a user message already in the model's prompt format needs no extension fields
+    res = post("/v1/chat/completions", json={"model": model, "messages": [
+        {"role": "user", "content": f"Translate the following text into English:\n\n{hindi}"}]})
+    back = res.json()["choices"][0]["message"]["content"] if res.status_code == 200 else ""
+    assert sum(c.isascii() for c in back) > 0.9 * max(len(back), 1), res.text
+    print(f"chat.completions hi->en (prompt format): {res.json()['choices'][0]['message']['content']}")
+
+    text, usage, finish = "", None, None
+    with post("/v1/chat/completions", json={"model": model, "target_language": "te", "stream": True,
+                                            "stream_options": {"include_usage": True},
+                                            "messages": [{"role": "user", "content": english}]}, stream=True) as res:
+        assert res.status_code == 200 and res.headers["Content-Type"].startswith("text/event-stream"), res.text
+        events = list(_sse_events(res))
+    assert events[-1] is None, "stream must end with [DONE]"
+    for ev in events[:-1]:
+        assert ev["object"] == "chat.completion.chunk"
+        if ev["choices"]:
+            text += ev["choices"][0]["delta"].get("content") or ""
+            finish = ev["choices"][0]["finish_reason"] or finish
+        else:
+            usage = ev["usage"]
+    assert any("ఀ" <= c <= "౿" for c in text) and finish == "stop" and usage["completion_tokens"] > 0
+    print(f"chat.completions stream en->te: {text}")
+
+    res = post("/v1/translations", json={"model": model, "input": ["Good morning.", "Thank you."],
+                                         "target_language": "Tamil"})
+    assert res.status_code == 200, res.text
+    tr = res.json()
+    assert tr["object"] == "translation" and tr["target_language"] == "ta" and len(tr["data"]) == 2
+    assert all(any("஀" <= c <= "௿" for c in d["text"]) for d in tr["data"]), tr["data"]
+    print("translations batch en->ta:", [d["text"] for d in tr["data"]])
+
+    res = post("/v1/translations", json={"model": model, "input": english, "target_language": "Hindi (Roman)"})
+    assert res.status_code == 200 and res.json()["script"] == "roman", res.text
+    print(f"translations en->hi (Roman): {res.json()['text']}")
+    print("OK")
+
+
 def test_files():
-    step("7. Saved files")
+    step("8. Saved files")
     files = get("/v1/audio/files").json()
     ids = {f["id"] for f in files}
     assert set(created_files) <= ids, "files created by this run should be listed"
@@ -339,8 +422,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-url", default=BASE_URL)
     parser.add_argument("--skip-lifecycle", action="store_true", help="skip the register/download/load test (needs internet, ~75 MB)")
+    parser.add_argument("--translation-model", help="translation model to test (default: the default one if downloaded)")
+    parser.add_argument("--only", help="comma-separated test names to run, e.g. translation,system")
     args = parser.parse_args()
     BASE_URL = args.base_url.rstrip("/")
+    if args.translation_model:
+        shared["translation_model"] = args.translation_model
 
     try:
         requests.get(BASE_URL + "/health", timeout=5)
@@ -348,9 +435,13 @@ def main() -> int:
         print(f"Server not reachable at {BASE_URL}: {e}\nStart it with ./start.sh first.")
         return 2
 
-    tests = [test_system, test_catalogs, test_model_lifecycle, test_tts, test_tts_streaming, test_asr, test_files]
+    tests = [test_system, test_catalogs, test_model_lifecycle, test_tts, test_tts_streaming, test_asr,
+             test_translation, test_files]
     if args.skip_lifecycle:
         tests.remove(test_model_lifecycle)
+    if args.only:
+        wanted = {"test_" + n.strip().removeprefix("test_") for n in args.only.split(",")}
+        tests = [t for t in tests if t.__name__ in wanted]
     failed = []
     t0 = time.time()
     try:

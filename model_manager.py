@@ -32,8 +32,8 @@ import psutil
 
 logger = logging.getLogger("model_manager")
 
-MODALITIES = ("llm", "vlm", "tts", "asr", "embedding", "rerank", "image_gen")
-SUPPORTED_MODALITIES = ("tts", "asr")  # phase 1
+MODALITIES = ("llm", "vlm", "tts", "asr", "translation", "embedding", "rerank", "image_gen")
+SUPPORTED_MODALITIES = ("tts", "asr", "translation")
 BACKENDS = ("mlx", "transformers", "diffusers", "auto")
 QUANTIZATIONS = ("4bit", "8bit", "bf16", "fp16", "fp32", "default")
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -46,6 +46,7 @@ PIPELINE_TO_MODALITY = {
     "text-to-speech": "tts",
     "text-to-audio": "tts",
     "automatic-speech-recognition": "asr",
+    "translation": "translation",
     "text-generation": "llm",
     "text2text-generation": "llm",
     "image-text-to-text": "vlm",
@@ -110,6 +111,35 @@ MODEL_CATALOG: List[dict] = [
         "backend": "transformers", "quantization": "fp32", "adapter": "transformers-tts",
         "description": "Meta MMS VITS Hindi: 145 MB single-voice TTS via the generic transformers adapter.",
         "default_params": {},
+    },
+    {
+        "id": "indic-translate", "repo_id": "bodhan-ai/indic-translate", "modality": "translation",
+        "backend": "mlx", "quantization": "bf16", "adapter": "indic-translate-mlx", "default": True,
+        "apple_silicon_only": True, "ignore_patterns": ["assets/*", "benchmarks/*", "*.png"],
+        "description": "Bodhan Indic Translate (Gemma 4 E4B) on MLX: English <-> 22 Indian languages, documents up to 32k tokens, "
+                       "Romanized, code-mixed and transliteration. Gated: accept the license on huggingface.co first.",
+        "default_params": {"temperature": 0.0, "top_p": 1.0},
+    },
+    {
+        "id": "indic-translate-torch", "repo_id": "bodhan-ai/indic-translate", "modality": "translation",
+        "backend": "transformers", "quantization": "bf16", "adapter": "indic-translate-torch", "default": True,
+        "ignore_patterns": ["assets/*", "benchmarks/*", "*.png"],
+        "description": "Bodhan Indic Translate reference checkpoint on PyTorch (MPS / CUDA / CPU). Gated.",
+        "default_params": {"temperature": 0.0, "top_p": 1.0},
+    },
+    {
+        "id": "indic-translate-mlx-8bit", "repo_id": "bodhan-ai/indic-translate", "modality": "translation",
+        "backend": "mlx", "quantization": "8bit", "adapter": "indic-translate-mlx", "apple_silicon_only": True,
+        "ignore_patterns": ["assets/*", "benchmarks/*", "*.png"],
+        "description": "Indic Translate quantized to 8-bit at load time on MLX: about half the memory of bf16. Gated.",
+        "default_params": {"temperature": 0.0, "top_p": 1.0},
+    },
+    {
+        "id": "gemma-4-e4b-it-4bit", "repo_id": "mlx-community/gemma-4-e4b-it-4bit", "modality": "translation",
+        "backend": "mlx", "quantization": "4bit", "adapter": "indic-translate-mlx", "apple_silicon_only": True,
+        "description": "Base Gemma 4 E4B instruct, 4-bit MLX (5 GB, ungated). The base model Indic Translate was tuned from; "
+                       "a lower-quality stand-in served through the same prompt format.",
+        "default_params": {"temperature": 0.0, "top_p": 1.0},
     },
 ]
 
@@ -209,6 +239,8 @@ def guess_adapter(repo_id: str, modality: str, backend: str) -> Optional[str]:
         if backend == "mlx":
             return "whisper-mlx" if "whisper" in name else None
         return "transformers-asr"
+    if modality == "translation":
+        return "indic-translate-mlx" if backend == "mlx" else "indic-translate-torch"
     return None
 
 
@@ -253,6 +285,18 @@ class ModelManager:
             data = self._seed_config()
         self.models = {m["id"]: m for m in data.get("models", [])}
         self.defaults = dict(data.get("defaults", {}))
+        # Registries written before a modality was supported get that modality's default models once.
+        seeded = data.get("seeded_modalities") or ["tts", "asr"]
+        added = False
+        for modality in SUPPORTED_MODALITIES:
+            if modality in seeded:
+                continue
+            for entry in MODEL_CATALOG:
+                if (entry["modality"] == modality and entry.get("default") and entry["id"] not in self.models
+                        and not (entry.get("apple_silicon_only") and not IS_APPLE_SILICON)):
+                    self.models[entry["id"]] = self._clean_entry(entry)
+                    added = True
+        self.seeded_modalities = sorted(set(seeded) | set(SUPPORTED_MODALITIES))
         self.aliases = {**DEFAULT_ALIASES, **data.get("aliases", {})}
         self.settings = {**DEFAULT_SETTINGS, **data.get("settings", {})}
         for modality in SUPPORTED_MODALITIES:      # make sure each default still points somewhere
@@ -262,7 +306,7 @@ class ModelManager:
                     self.defaults[modality] = candidates[0]
                 else:
                     self.defaults.pop(modality, None)
-        if not self.config_path.exists():
+        if added or not self.config_path.exists() or seeded != self.seeded_modalities:
             self._save_config()
 
     def _seed_config(self) -> dict:
@@ -279,7 +323,9 @@ class ModelManager:
             "defaults": {
                 "tts": "indic-speak-mlx" if "indic-speak-mlx" in ids else "indic-speak-torch",
                 "asr": "indic-transcribe",
+                "translation": "indic-translate" if "indic-translate" in ids else "indic-translate-torch",
             },
+            "seeded_modalities": list(SUPPORTED_MODALITIES),
             "aliases": dict(DEFAULT_ALIASES),
             "settings": dict(DEFAULT_SETTINGS),
             "models": models,
@@ -300,6 +346,7 @@ class ModelManager:
             payload = {
                 "version": 1,
                 "defaults": self.defaults,
+                "seeded_modalities": getattr(self, "seeded_modalities", list(SUPPORTED_MODALITIES)),
                 "aliases": self.aliases,
                 "settings": self.settings,
                 "models": list(self.models.values()),
@@ -558,6 +605,8 @@ class ModelManager:
         if modality is None:
             if any(k in name for k in ("whisper", "transcribe", "asr", "wav2vec", "canary", "parakeet")):
                 modality = "asr"
+            elif any(k in name for k in ("translat", "indictrans", "nllb", "madlad")):
+                modality = "translation"
             elif any(k in name for k in ("tts", "speak", "kokoro", "bark", "parler", "vits")):
                 modality = "tts"
             elif any(k in name for k in ("rerank",)):
@@ -574,7 +623,10 @@ class ModelManager:
             backend = "diffusers"
         else:
             backend = "transformers"
-        catalog = next((c for c in MODEL_CATALOG if c["repo_id"].lower() == name), None)
+        catalog = next((c for c in MODEL_CATALOG if c["repo_id"].lower() == name
+                        and not (c.get("apple_silicon_only") and not IS_APPLE_SILICON)), None)
+        if catalog:
+            backend = catalog["backend"]
         adapter = (catalog or {}).get("adapter") or guess_adapter(repo_id, modality, backend)
         size = sum(s.size or 0 for s in (info.siblings or []))
         supported = modality in SUPPORTED_MODALITIES and adapter is not None
@@ -746,7 +798,8 @@ class ModelManager:
         if spec["id"] in self._loaded:
             return spec
         if spec["modality"] not in SUPPORTED_MODALITIES:
-            raise ModelError(f"Serving '{spec['modality']}' models is not implemented yet (phase 1 covers tts and asr).",
+            raise ModelError(f"Serving '{spec['modality']}' models is not implemented yet "
+                             f"(supported: {', '.join(SUPPORTED_MODALITIES)}).",
                              status=501, code="modality_not_supported")
         if not spec.get("adapter"):
             raise ModelError(f"No engine adapter is available for '{spec['repo_id']}'.", status=501, code="adapter_not_found")

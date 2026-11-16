@@ -181,6 +181,8 @@ cat <<EOF
   POST $BASE/v1/audio/speech
   POST $BASE/v1/audio/transcriptions
   POST $BASE/v1/audio/translations
+  POST $BASE/v1/chat/completions      (text translation)
+  POST $BASE/v1/translations
   GET  $BASE/v1/models
   GET  $BASE/v1/system/status
 ================================================================
