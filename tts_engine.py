@@ -9,6 +9,7 @@ Adapters:
   indic-speak-torch  bodhan-ai/indic-speak             PyTorch (MPS / CUDA / CPU)
   kokoro             hexgrad/Kokoro-82M                optional `kokoro` package
   transformers-tts   any HF text-to-speech pipeline    MMS-TTS / VITS, Bark, ...
+  remote-openai-tts  another OpenAI-compatible server  proxied over HTTP (e.g. Vāgdhenu)
 """
 from __future__ import annotations
 
@@ -377,7 +378,99 @@ class TransformersTTS(TTSAdapter):
         return np.asarray(out["audio"], dtype=np.float32).reshape(-1), {}
 
 
-ADAPTERS = {cls.name: cls for cls in (IndicSpeakMLX, IndicSpeakTorch, KokoroTTS, TransformersTTS)}
+class RemoteOpenAITTS(TTSAdapter):
+    """Proxy to another OpenAI-compatible TTS server (`POST {remote_url}/audio/speech`).
+
+    Registry fields: `remote_url` (base URL ending in /v1), `remote_model` (the model name
+    upstream; defaults to the id), optional `timeout_s` and `language_name` for the voice list.
+    Text is sent whole: the upstream server does its own segmentation, and splitting at
+    sentence marks would break verses apart before meter detection.
+    """
+    name = "remote-openai-tts"
+    engine = "remote"
+    native_speed = True
+    chunk_text = False
+    _voice_cache: Dict[str, Tuple[float, dict]] = {}
+    VOICE_CACHE_S = 60.0
+
+    @classmethod
+    def catalog_for_spec(cls, spec: dict) -> dict:
+        url = (spec.get("remote_url") or "").rstrip("/")
+        hit = cls._voice_cache.get(url)
+        if hit and time.time() - hit[0] < cls.VOICE_CACHE_S:
+            return hit[1]
+        lang_name = spec.get("language_name") or "Remote"
+        fallback = (spec.get("default_params") or {}).get("voice") or "default"
+        names, default, note = [fallback], fallback, ""
+        try:
+            import requests
+            r = requests.get(f"{url}/audio/voices", timeout=3)
+            r.raise_for_status()
+            data = r.json()
+            raw = data.get("voices") or []
+            if isinstance(raw, dict):
+                raw = list(raw)
+            names = [v if isinstance(v, str) else v.get("id") or v.get("name") for v in raw] or names
+            default = data.get("default") or names[0]
+            note = data.get("note") or ""
+        except Exception as e:
+            logger.warning("Could not fetch voices from %s: %s", url, e)
+            cat = {"voices": {fallback: {"gender": "", "lang": "", "lang_name": lang_name, "desc": "Upstream unreachable"}},
+                   "openai_aliases": {}, "styles": [], "default_voice": fallback}
+            return cat                                   # not cached: retry next time
+        voices = {n: {"gender": "", "lang": "", "lang_name": lang_name, "desc": note if n == default else ""}
+                  for n in names if n}
+        cat = {"voices": voices, "openai_aliases": {}, "styles": [], "default_voice": default}
+        cls._voice_cache[url] = (time.time(), cat)
+        return cat
+
+    def load(self, local_dir, spec, token):
+        import requests
+        self.spec = spec
+        self.url = (spec.get("remote_url") or "").rstrip("/")
+        if not self.url:
+            raise ModelError(f"Model '{spec['id']}' has no remote_url.", status=500, code="model_load_failed")
+        self.remote_model = spec.get("remote_model") or spec["id"]
+        self.timeout = float(spec.get("timeout_s") or 300)
+        self.session = requests.Session()
+        try:
+            self.session.get(f"{self.url}/models", timeout=5).raise_for_status()
+        except Exception as e:
+            raise ModelError(f"Remote TTS server for '{spec['id']}' at {self.url} is unreachable: {e}",
+                             status=502, code="upstream_unavailable")
+
+    def resolve_voice(self, voice):
+        cat = self.catalog_for_spec(self.spec)
+        name = (voice or "").strip()
+        if not name:
+            return cat["default_voice"]
+        for v in cat["voices"]:
+            if v.lower() == name.lower():
+                return v
+        return name          # unknown names (e.g. OpenAI voices) are the upstream server's call
+
+    def synth_sentence(self, text, voice, style, params):
+        import io
+        import soundfile as sf
+        body = {"model": self.remote_model, "input": text, "voice": voice,
+                "response_format": "wav", "speed": float(params.get("speed", 1.0))}
+        if params.get("seed") is not None:
+            body["seed"] = int(params["seed"])
+        if params.get("instructions"):
+            body["instructions"] = params["instructions"]
+        try:
+            r = self.session.post(f"{self.url}/audio/speech", json=body, timeout=self.timeout)
+        except Exception as e:
+            raise ModelError(f"Remote TTS request failed: {e}", status=502, code="upstream_unavailable")
+        if r.status_code != 200:
+            raise ModelError(f"Remote TTS returned {r.status_code}: {r.text[:300]}",
+                             status=502 if r.status_code >= 500 else 400, code="upstream_error")
+        wav, sr = sf.read(io.BytesIO(r.content), dtype="float32", always_2d=True)
+        self.sample_rate = int(sr)
+        return wav.mean(axis=1), {}
+
+
+ADAPTERS = {cls.name: cls for cls in (IndicSpeakMLX, IndicSpeakTorch, KokoroTTS, TransformersTTS, RemoteOpenAITTS)}
 
 
 def create_adapter(spec: dict) -> TTSAdapter:
@@ -390,6 +483,8 @@ def create_adapter(spec: dict) -> TTSAdapter:
 
 def catalog_for(spec: dict) -> dict:
     cls = ADAPTERS.get(spec.get("adapter") or "", TTSAdapter)
+    if hasattr(cls, "catalog_for_spec"):
+        return cls.catalog_for_spec(spec)
     return cls.catalog()
 
 

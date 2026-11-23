@@ -17,6 +17,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -254,6 +255,15 @@ class SpeechRequest(BaseModel):
     instructions: Optional[str] = Field(default=None, description="Accepted for OpenAI compatibility; used as style when `style` is unset")
 
 
+def _header_value(value: str) -> str:
+    """HTTP headers are latin-1; percent-encode names like 'anuṣṭubh'."""
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        return quote(value)
+
+
 @app.post("/v1/audio/speech", tags=["Audio"])
 async def audio_speech(req: SpeechRequest):
     """OpenAI-compatible speech synthesis."""
@@ -278,6 +288,8 @@ async def audio_speech(req: SpeechRequest):
     params: Dict[str, Any] = {"temperature": req.temperature if req.temperature is not None else defaults.get("temperature", 0.6)}
     if req.seed is not None:
         params["seed"] = req.seed
+    if req.instructions:
+        params["instructions"] = req.instructions
     save = req.save is not False
     file_id = _new_file_id("tts")
     media_type, ext, _ = AUDIO_FORMATS[fmt]
@@ -358,7 +370,7 @@ async def audio_speech(req: SpeechRequest):
     headers.update({
         "Content-Disposition": f'attachment; filename="{file_id}.{ext}"',
         "X-Audio-Duration": str(stats["audio_s"]), "X-Generation-Time": str(stats["total_s"]),
-        "X-RTF": str(stats["rtf"]), "X-Voice": stats["voice"],
+        "X-RTF": str(stats["rtf"]), "X-Voice": _header_value(stats["voice"]),
     })
     return Response(content=audio, media_type=media_type, headers=headers)
 

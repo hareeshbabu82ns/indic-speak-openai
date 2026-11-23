@@ -170,6 +170,31 @@
       "context_length": null,
       "chat_template": null,
       "created": 1794762193
+    },
+    {
+      "id": "vagdhenu",
+      "name": "Vāgdhenu",
+      "repo_id": "vagdhenu",
+      "owned_by": "vagdhenu",
+      "modality": "tts",
+      "backend": "remote",
+      "quantization": "default",
+      "adapter": "remote-openai-tts",
+      "remote_url": "http://mdev.local.io:8880/v1",
+      "remote_model": "vagdhenu",
+      "timeout_s": 300,
+      "language_name": "Sanskrit (meters)",
+      "description": "Vāgdhenu: Sanskrit chanting TTS with meter (chandas) detection, served by a remote OpenAI-compatible engine. Voice = meter; 'auto' detects it from the text.",
+      "default_params": {
+        "voice": "auto",
+        "speed": 1.0
+      },
+      "aliases": [
+        "Vāgdhenu"
+      ],
+      "context_length": null,
+      "chat_template": null,
+      "created": 1795397115
     }
   ]
 }

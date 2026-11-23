@@ -34,7 +34,7 @@ logger = logging.getLogger("model_manager")
 
 MODALITIES = ("llm", "vlm", "tts", "asr", "translation", "embedding", "rerank", "image_gen")
 SUPPORTED_MODALITIES = ("tts", "asr", "translation")
-BACKENDS = ("mlx", "transformers", "diffusers", "auto")
+BACKENDS = ("mlx", "transformers", "diffusers", "remote", "auto")
 QUANTIZATIONS = ("4bit", "8bit", "bf16", "fp16", "fp32", "default")
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 GB = 1024 ** 3
@@ -422,7 +422,14 @@ class ModelManager:
             self._cache_index, self._cache_index_at, self._cache_total = index, time.time(), total
             return index
 
+    @staticmethod
+    def is_remote(spec: dict) -> bool:
+        """Remote models proxy another server's API: nothing to download, no local memory."""
+        return spec.get("backend") == "remote"
+
     def _repos(self, spec: dict) -> List[str]:
+        if self.is_remote(spec):
+            return []
         return [spec["repo_id"], *spec.get("extra_repos", [])]
 
     def is_cached(self, spec: dict) -> bool:
@@ -456,7 +463,9 @@ class ModelManager:
             "id": spec["id"],
             "object": "model",
             "created": spec.get("created", 0),
-            "owned_by": spec["repo_id"].split("/")[0],
+            "owned_by": spec.get("owned_by") or spec["repo_id"].split("/")[0],
+            "name": spec.get("name") or spec["id"],
+            "remote_url": spec.get("remote_url"),
             "repo_id": spec["repo_id"],
             "modality": spec["modality"],
             "backend": spec.get("backend", "auto"),
@@ -493,6 +502,9 @@ class ModelManager:
         backend = payload.get("backend") or "auto"
         if backend not in BACKENDS:
             raise ModelError(f"backend must be one of {', '.join(BACKENDS)}.", param="backend")
+        if backend == "remote":
+            raise ModelError("Remote models are added by editing config/models.json (see the 'vagdhenu' entry).",
+                             param="backend")
         if backend == "auto":
             backend = "mlx" if ("mlx" in repo_id.lower() and IS_APPLE_SILICON) else "transformers"
         model_id = (payload.get("id") or slugify_model_id(repo_id)).strip()
@@ -838,13 +850,14 @@ class ModelManager:
         factory = self._factories.get(spec["modality"])
         if factory is None:
             raise ModelError(f"No engine registered for modality '{spec['modality']}'.", status=501, code="modality_not_supported")
-        from huggingface_hub import snapshot_download
-        try:
-            local_dir = snapshot_download(spec["repo_id"], local_files_only=True, token=self.hf_token)
-        except Exception as e:
-            raise ModelError(f"Weights for '{spec['id']}' are not on disk: {e}", status=409, code="model_not_downloaded")
-
-        self._evict_for(spec)
+        local_dir = None
+        if not self.is_remote(spec):
+            from huggingface_hub import snapshot_download
+            try:
+                local_dir = snapshot_download(spec["repo_id"], local_files_only=True, token=self.hf_token)
+            except Exception as e:
+                raise ModelError(f"Weights for '{spec['id']}' are not on disk: {e}", status=409, code="model_not_downloaded")
+            self._evict_for(spec)
         task = self._new_task(spec["id"], "load")
         before, t0 = self._device_memory(), time.time()
         try:
@@ -863,7 +876,7 @@ class ModelManager:
         with self._lock:
             self._loaded[spec["id"]] = {
                 "adapter": adapter, "loaded_at": now, "last_used": now,
-                "memory_bytes": max(self._device_memory() - before, 0), "load_seconds": round(now - t0, 2),
+                "memory_bytes": 0 if self.is_remote(spec) else max(self._device_memory() - before, 0), "load_seconds": round(now - t0, 2),
             }
         task.update(status="completed", progress=100.0, finished_at=now)
         logger.info("Loaded %s in %.1fs", spec["id"], now - t0)
@@ -875,15 +888,20 @@ class ModelManager:
         index = self._scan_cache()
         estimate = int(1.15 * sum(index.get(r, {}).get("size", 0) for r in self._repos(incoming)))
 
+        def local_ids():     # remote models hold no device memory, so they never count or get evicted
+            with self._lock:
+                return [k for k in self._loaded if not self.is_remote(self.models.get(k, {}))]
+
         def lru():
             with self._lock:
-                return min(self._loaded, key=lambda k: self._loaded[k]["last_used"]) if self._loaded else None
+                ids = local_ids()
+                return min(ids, key=lambda k: self._loaded[k]["last_used"]) if ids else None
 
-        while len(self._loaded) >= max_models:
+        while len(local_ids()) >= max_models:
             victim = lru()
             logger.info("Evicting %s (max_loaded_models=%d)", victim, max_models)
             self._unload_sync(victim)
-        while self._loaded and psutil.virtual_memory().available - estimate < min_free:
+        while local_ids() and psutil.virtual_memory().available - estimate < min_free:
             victim = lru()
             logger.info("Evicting %s to free memory for %s", victim, incoming["id"])
             self._unload_sync(victim)
